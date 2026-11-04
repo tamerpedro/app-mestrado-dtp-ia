@@ -1,0 +1,16 @@
+{
+  "case_id": "synthetic-001",
+  "_comentario": "Caso FICTICIO, apenas para demonstrar o formato esperado e alimentar os testes automatizados. Nao representa uma contratacao real.",
+  "context": {
+    "objeto": "Aquisicao de solucao de software de seguranca da informacao com homologacao tecnica",
+    "tipo_contratacao": "software",
+    "valor_estimado": 850000.0,
+    "criticidade": "alta",
+    "prazo": "12 meses",
+    "modalidade": "pregao",
+    "contexto": "Contratacao exige requisitos de seguranca, homologacao tecnica e controle de acesso a dados sensiveis."
+  },
+  "gabarito_ids": ["R001", "R006", "R059"],
+  "used_to_build_base": false,
+  "provenance_notes": "Caso sintetico de exemplo; nao alimentou data/riscos_base.csv."
+}

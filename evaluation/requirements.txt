@@ -1,0 +1,14 @@
+# Dependencias do pacote evaluation/, separadas das do app (requirements.txt na raiz).
+#
+# O nucleo (motores de regras e BM25, metricas, bootstrap, carregamento de
+# casos) usa so a biblioteca padrao do Python 3.12 -- nenhuma instalacao e
+# necessaria para rodar os testes em evaluation/tests/.
+#
+# Dependencias abaixo so sao necessarias para usar os motores correspondentes
+# com um backend/cliente real (nos testes, ambos sao substituidos por
+# dublês deterministicos, ver evaluation/tests/):
+
+requests>=2.31          # motor LLM (LocalHTTPLLMClient): chamada HTTP ao endpoint local
+
+# Motor de embeddings "de producao" (modelo fixo, execucao local):
+# -r requirements-embeddings.txt

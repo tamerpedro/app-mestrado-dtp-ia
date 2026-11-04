@@ -12,3 +12,10 @@ reference_*
 pdf_last_page_*.png
 .DS_Store
 Thumbs.db
+
+# Avaliacao comparativa de motores (evaluation/): nunca versionar casos
+# reais de contratacoes (dados sensiveis) nem relatorios gerados.
+evaluation/cases/real/*
+!evaluation/cases/real/.gitkeep
+evaluation/reports/*
+!evaluation/reports/.gitkeep

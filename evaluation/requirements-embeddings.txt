@@ -1,0 +1,10 @@
+# Dependencia pesada e opcional: so instale se for rodar o motor de
+# embeddings com o backend real "sentence-transformers" (evaluation.config.
+# EmbeddingConfig.backend == "sentence-transformers", o padrao de producao).
+#
+# Baixa o modelo fixo (evaluation.config.DEFAULT_EMBEDDING_MODEL_NAME) na
+# primeira execucao e roda a inferencia localmente -- nenhum texto sai da
+# maquina. Nao e necessaria para os testes automatizados, que usam
+# evaluation.engines.embedding_engine.HashingEmbeddingBackend.
+
+sentence-transformers>=3.0
