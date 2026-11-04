@@ -17,6 +17,17 @@ def test_precision_at_k_counts_hits_in_top_k():
     assert precision_at_k([], relevant, 5) == 0.0
 
 
+def test_precision_at_k_divides_by_k_even_when_fewer_items_are_returned():
+    """Um motor com cortes de producao (ex.: rules_production) pode devolver
+    menos de k itens -- precisao@10 com 2 itens, ambos relevantes, deve ser
+    2/10, nunca 2/2=1.0 (o que inflaria artificialmente a metrica)."""
+    predicted = ["A", "B"]
+    relevant = frozenset({"A", "B"})
+
+    assert precision_at_k(predicted, relevant, 10) == 2 / 10
+    assert precision_at_k(predicted, relevant, 2) == 1.0
+
+
 def test_recall_at_k_divides_by_relevant_set_size():
     predicted = ["A", "B", "C"]
     relevant = frozenset({"B", "D"})

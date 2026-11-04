@@ -5,15 +5,30 @@ import pytest
 from evaluation.config import LLMConfig, LLMConfigError
 from evaluation.engines import llm_engine
 from evaluation.engines.llm_engine import LLMNotEnabledError
+from evaluation.text_utils import risk_document_text
 
 
 class FakeLLMClient:
-    def __init__(self, response_text: str) -> None:
+    def __init__(self, response_text: str, last_model_id: str | None = None) -> None:
         self.response_text = response_text
         self.calls = 0
+        self.last_user_prompt: str | None = None
+        self.last_model_id = last_model_id
 
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
         self.calls += 1
+        self.last_user_prompt = user_prompt
+        return self.response_text
+
+
+class FakeLLMClientWithoutModelId:
+    """Cliente minimo, sem o atributo opcional ``last_model_id`` -- deve
+    funcionar normalmente, so sem preencher ``reported_model_id``."""
+
+    def __init__(self, response_text: str) -> None:
+        self.response_text = response_text
+
+    def complete(self, *, system_prompt: str, user_prompt: str) -> str:
         return self.response_text
 
 
@@ -83,3 +98,43 @@ def test_response_with_surrounding_text_is_still_parsed(synthetic_risks, securit
     result = llm_engine.rank(security_context, synthetic_risks, config, client=client)
 
     assert result.ranked_ids == ("S001", "S003")
+
+
+def test_prompt_uses_the_same_risk_text_as_bm25_and_embeddings(synthetic_risks, security_context):
+    """O prompt deve descrever cada candidato com o mesmo texto usado pelo
+    BM25 e pelo motor de embeddings (``text_utils.risk_document_text``), nao
+    um resumo proprio -- para que os tres motores vejam a mesma informacao."""
+    config = LLMConfig(enabled=True)
+    client = FakeLLMClient("[]")
+
+    llm_engine.rank(security_context, synthetic_risks, config, client=client)
+
+    assert client.last_user_prompt is not None
+    for risk in synthetic_risks:
+        assert risk_document_text(risk) in client.last_user_prompt
+
+
+def test_reported_model_id_is_captured_from_the_client(synthetic_risks, security_context):
+    config = LLMConfig(enabled=True, model="llama3.1:8b-instruct")
+    client = FakeLLMClient(json.dumps(["S001"]), last_model_id="llama3.1:8b-instruct-q4_0")
+
+    result = llm_engine.rank(security_context, synthetic_risks, config, client=client)
+
+    assert result.reported_model_id == "llama3.1:8b-instruct-q4_0"
+
+
+def test_reported_model_id_is_none_when_client_does_not_expose_it(synthetic_risks, security_context):
+    config = LLMConfig(enabled=True)
+    client = FakeLLMClientWithoutModelId(json.dumps(["S001"]))
+
+    result = llm_engine.rank(security_context, synthetic_risks, config, client=client)
+
+    assert result.reported_model_id is None
+    assert result.ranked_ids == ("S001",)
+
+
+def test_non_llm_rank_results_never_set_reported_model_id(synthetic_risks, security_context):
+    from evaluation.engines import bm25_engine, rules_engine
+
+    assert rules_engine.rank(security_context, synthetic_risks).reported_model_id is None
+    assert bm25_engine.rank(security_context, synthetic_risks).reported_model_id is None

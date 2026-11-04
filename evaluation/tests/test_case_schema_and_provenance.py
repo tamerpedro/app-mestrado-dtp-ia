@@ -29,6 +29,18 @@ def test_case_from_dict_parses_a_valid_payload():
     assert case.context.objeto == "Aquisicao de software"
     assert case.gabarito_ids == ("S001", "S002")
     assert case.used_to_build_base is False
+    # Campos opcionais de metodologia: ausentes no payload, devem ficar None.
+    assert case.context_predates_risk_map is None
+    assert case.annotator_count is None
+
+
+def test_case_from_dict_parses_optional_methodology_fields_when_present():
+    payload = {**VALID_PAYLOAD, "context_predates_risk_map": True, "annotator_count": 2}
+
+    case = case_from_dict(payload)
+
+    assert case.context_predates_risk_map is True
+    assert case.annotator_count == 2
 
 
 @pytest.mark.parametrize("missing_field", ["case_id", "context", "gabarito_ids", "used_to_build_base"])
@@ -82,3 +94,59 @@ def test_split_by_provenance_reports_gabarito_ids_missing_from_the_library(synth
     report = split_by_provenance([case], synthetic_risks)
 
     assert report.cases_with_unknown_gabarito_ids == {"case-with-gap": ("DOES-NOT-EXIST",)}
+
+
+def test_split_by_provenance_warns_when_methodology_fields_are_missing(synthetic_risks):
+    payload = {**VALID_PAYLOAD, "case_id": "case-no-methodology"}
+    case = case_from_dict(payload)  # sem context_predates_risk_map nem annotator_count
+
+    report = split_by_provenance([case], synthetic_risks)
+
+    warnings = report.methodology_warnings["case-no-methodology"]
+    assert any("context_predates_risk_map" in warning for warning in warnings)
+    assert any("annotator_count" in warning for warning in warnings)
+
+
+def test_split_by_provenance_warns_when_context_does_not_predate_the_risk_map(synthetic_risks):
+    payload = {
+        **VALID_PAYLOAD,
+        "case_id": "case-hindsight",
+        "context_predates_risk_map": False,
+        "annotator_count": 2,
+    }
+    case = case_from_dict(payload)
+
+    report = split_by_provenance([case], synthetic_risks)
+
+    warnings = report.methodology_warnings["case-hindsight"]
+    assert any("hindsight" in warning or "retrospectiva" in warning for warning in warnings)
+    assert not any("annotator_count" in warning for warning in warnings)
+
+
+def test_split_by_provenance_warns_when_fewer_than_two_annotators(synthetic_risks):
+    payload = {
+        **VALID_PAYLOAD,
+        "case_id": "case-one-annotator",
+        "context_predates_risk_map": True,
+        "annotator_count": 1,
+    }
+    case = case_from_dict(payload)
+
+    report = split_by_provenance([case], synthetic_risks)
+
+    warnings = report.methodology_warnings["case-one-annotator"]
+    assert any("annotator_count=1" in warning for warning in warnings)
+
+
+def test_split_by_provenance_has_no_methodology_warnings_for_a_well_formed_case(synthetic_risks):
+    payload = {
+        **VALID_PAYLOAD,
+        "case_id": "case-well-formed",
+        "context_predates_risk_map": True,
+        "annotator_count": 2,
+    }
+    case = case_from_dict(payload)
+
+    report = split_by_provenance([case], synthetic_risks)
+
+    assert "case-well-formed" not in report.methodology_warnings

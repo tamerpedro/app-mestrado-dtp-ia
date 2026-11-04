@@ -21,7 +21,7 @@ from typing import Protocol
 from src.models import ContractContext, RiskItem
 
 from ..config import LLMConfig
-from ..text_utils import context_query_text
+from ..text_utils import context_query_text, risk_document_text
 from .base import RankResult
 
 name = "llm"
@@ -32,7 +32,17 @@ class LLMNotEnabledError(RuntimeError):
 
 
 class LLMClient(Protocol):
-    """Qualquer cliente que receba um prompt e devolva o texto da resposta."""
+    """Qualquer cliente que receba um prompt e devolva o texto da resposta.
+
+    Alem de ``complete``, um cliente pode expor o atributo opcional
+    ``last_model_id`` (``str | None``) apos a chamada, com o identificador
+    exato do modelo que de fato respondeu -- conforme devolvido pelo
+    servidor, que pode resolver uma tag configurada (ex.: ``"llama3.1:8b"``)
+    para uma versao/digest especifica. ``rank()`` le esse atributo, se
+    presente, e o registra em ``RankResult.reported_model_id`` para o
+    relatorio. Um cliente que nao o exponha (como ``getattr`` padrao)
+    simplesmente nao tera essa informacao registrada.
+    """
 
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
         ...
@@ -47,6 +57,7 @@ class LocalHTTPLLMClient:
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
+        self.last_model_id: str | None = None
 
     def complete(self, *, system_prompt: str, user_prompt: str) -> str:
         import requests
@@ -65,6 +76,10 @@ class LocalHTTPLLMClient:
         )
         response.raise_for_status()
         payload = response.json()
+        # APIs compativeis com a da OpenAI devolvem o modelo que de fato
+        # respondeu em "model" -- pode ser mais especifico do que a tag
+        # configurada (ex.: resolvida para uma versao/digest exata).
+        self.last_model_id = payload.get("model")
         return payload["choices"][0]["message"]["content"]
 
 
@@ -77,12 +92,12 @@ SYSTEM_PROMPT = (
 
 
 def _build_user_prompt(context: ContractContext, risks: list[RiskItem], max_candidates: int) -> str:
+    """Usa ``risk_document_text`` para descrever cada candidato -- o mesmo texto
+    por risco usado pelo BM25 e pelo motor de embeddings (``text_utils.py``),
+    para que os tres motores vejam exatamente a mesma informacao sobre cada
+    risco e a comparacao entre eles seja justa."""
     candidates = risks[:max_candidates]
-    candidate_lines = [
-        f"- {risk.id}: {risk.titulo} (categoria={risk.categoria}, "
-        f"palavras_chave={';'.join(risk.palavras_chave)})"
-        for risk in candidates
-    ]
+    candidate_lines = [f"- {risk.id}: {risk_document_text(risk)}" for risk in candidates]
     return (
         f"Contratacao:\n{context_query_text(context)}\n\n"
         f"Candidatos (use somente estes IDs):\n" + "\n".join(candidate_lines)
@@ -122,6 +137,7 @@ def rank(
     user_prompt = _build_user_prompt(context, risks, config.max_candidates)
     raw_response = client.complete(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
     raw_ids = _parse_ids(raw_response)
+    reported_model_id = getattr(client, "last_model_id", None)
 
     known_ids = {risk.id for risk in risks}
     seen: set[str] = set()
@@ -131,4 +147,8 @@ def rank(
             valid_ids.append(risk_id)
             seen.add(risk_id)
 
-    return RankResult(ranked_ids=tuple(valid_ids), raw_ids_before_validation=raw_ids)
+    return RankResult(
+        ranked_ids=tuple(valid_ids),
+        raw_ids_before_validation=raw_ids,
+        reported_model_id=reported_model_id,
+    )

@@ -12,11 +12,13 @@ from collections.abc import Sequence
 
 
 def precision_at_k(predicted_ids: Sequence[str], relevant_ids: frozenset[str], k: int) -> float:
-    top_k = predicted_ids[:k]
-    if not top_k:
-        return 0.0
-    hits = sum(1 for risk_id in top_k if risk_id in relevant_ids)
-    return hits / len(top_k)
+    """Divide sempre por ``k`` (definicao padrao), nao pelo tamanho da lista
+    devolvida. Isso importa para motores que podem devolver menos de ``k``
+    itens (ex.: `rules_production`, com corte por `minimum_score`): devolver
+    2 itens relevantes entre 2 e contar como precisao@10 = 1.0 inflaria
+    artificialmente a metrica de um motor que decidiu sugerir pouco."""
+    hits = sum(1 for risk_id in predicted_ids[:k] if risk_id in relevant_ids)
+    return hits / k
 
 
 def recall_at_k(predicted_ids: Sequence[str], relevant_ids: frozenset[str], k: int) -> float | None:

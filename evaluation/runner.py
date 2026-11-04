@@ -39,6 +39,13 @@ from .metrics.validity import invalid_id_rate
 from .run_metadata import RunMetadata, collect_run_metadata
 
 BASELINE_ENGINE = "rules"
+# Variante informativa do motor de regras, com os cortes de producao
+# (minimum_score e limite por categoria). E calculada automaticamente
+# sempre que BASELINE_ENGINE roda, e aparece no relatorio ao lado do
+# ranking completo -- mas fica fora do bootstrap pareado (nao e um motor
+# candidato a substituir o atual, e sim o proprio motor atual como o
+# usuario de fato ve).
+PRODUCTION_RULES_ENGINE = "rules_production"
 BOOTSTRAP_METRICS = ("precision_at_5", "precision_at_10", "recall_at_5", "recall_at_10", "ndcg_at_10", "mrr")
 
 
@@ -57,6 +64,11 @@ class CaseEngineRecord:
     reproducibility_exact_match_rate: float
     reproducibility_mean_top_k_jaccard: float
     predicted_top_10: tuple[str, ...]
+    llm_reported_model_id: str | None = None
+    """Identificador exato do modelo LLM que respondeu, conforme devolvido
+    pelo servidor (ver ``engines.base.RankResult.reported_model_id``).
+    ``None`` para motores que nao sao o LLM, ou quando o servidor nao
+    informa o campo."""
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,7 @@ class EngineAggregate:
     mean_invalid_id_rate: float | None
     mean_execution_time_s: float
     mean_reproducibility_exact_match_rate: float
+    distinct_llm_reported_model_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -93,6 +106,8 @@ def _rank_with_engine(
 ) -> RankResult:
     if engine_name == "rules":
         return rules_engine.rank(context, risks)
+    if engine_name == PRODUCTION_RULES_ENGINE:
+        return rules_engine.rank_as_shown_in_production(context, risks)
     if engine_name == "bm25":
         return bm25_engine.rank(context, risks, config.bm25)
     if engine_name == "embedding":
@@ -146,10 +161,14 @@ def evaluate_case_with_engine(
         reproducibility_exact_match_rate=reproducibility.exact_match_rate,
         reproducibility_mean_top_k_jaccard=reproducibility.mean_top_k_jaccard,
         predicted_top_10=tuple(predicted[:10]),
+        llm_reported_model_id=result.reported_model_id,
     )
 
 
 def aggregate_engine_records(engine_name: str, records: list[CaseEngineRecord]) -> EngineAggregate:
+    distinct_model_ids = tuple(
+        sorted({r.llm_reported_model_id for r in records if r.llm_reported_model_id is not None})
+    )
     return EngineAggregate(
         engine=engine_name,
         n_cases=len(records),
@@ -162,7 +181,15 @@ def aggregate_engine_records(engine_name: str, records: list[CaseEngineRecord]) 
         mean_invalid_id_rate=_mean_or_none([r.invalid_id_rate for r in records]),
         mean_execution_time_s=statistics.fmean(r.execution_time_s for r in records),
         mean_reproducibility_exact_match_rate=statistics.fmean(r.reproducibility_exact_match_rate for r in records),
+        distinct_llm_reported_model_ids=distinct_model_ids,
     )
+
+
+def _bootstrap_metric_order(config: RunConfig) -> tuple[str, ...]:
+    """Métrica principal (``config.primary_metric``, pré-registrada antes dos
+    dados reais) primeiro; as demais, exploratórias, na ordem de sempre."""
+    others = tuple(metric for metric in BOOTSTRAP_METRICS if metric != config.primary_metric)
+    return (config.primary_metric, *others)
 
 
 def compute_bootstrap_vs_baseline(
@@ -171,7 +198,10 @@ def compute_bootstrap_vs_baseline(
     baseline_name: str = BASELINE_ENGINE,
 ) -> dict[str, dict[str, PairedBootstrapResult]]:
     by_engine_case = {(record.engine, record.case_id): record for record in records}
-    engine_names = sorted({record.engine for record in records} - {baseline_name})
+    # rules_production e informativo (o motor atual com os cortes de
+    # producao), nao um candidato a substituir o motor atual -- por isso
+    # nao entra na comparacao via bootstrap.
+    engine_names = sorted({record.engine for record in records} - {baseline_name, PRODUCTION_RULES_ENGINE})
 
     comparisons: dict[str, dict[str, PairedBootstrapResult]] = {}
     for engine_name in engine_names:
@@ -181,7 +211,7 @@ def compute_bootstrap_vs_baseline(
             if name == engine_name and (baseline_name, case_id) in by_engine_case
         )
         metric_results: dict[str, PairedBootstrapResult] = {}
-        for metric in BOOTSTRAP_METRICS:
+        for metric in _bootstrap_metric_order(config):
             diffs = []
             for case_id in case_ids:
                 baseline_value = getattr(by_engine_case[(baseline_name, case_id)], metric)
@@ -225,9 +255,17 @@ def run_evaluation(
     if "embedding" in engines and embedding_backend is None:
         embedding_backend = build_default_backend(config.embedding)
 
+    # rules_production (os mesmos cortes que o app mostra ao usuario) e
+    # calculado automaticamente sempre que "rules" (ranking completo) roda,
+    # para que o relatorio traga as duas visoes lado a lado -- ver
+    # PRODUCTION_RULES_ENGINE.
+    engines_to_run = list(engines)
+    if "rules" in engines:
+        engines_to_run.append(PRODUCTION_RULES_ENGINE)
+
     records: list[CaseEngineRecord] = []
     for case in provenance.main_eval_cases:
-        for engine_name in engines:
+        for engine_name in engines_to_run:
             records.append(
                 evaluate_case_with_engine(
                     case,
@@ -242,7 +280,7 @@ def run_evaluation(
 
     aggregates = tuple(
         aggregate_engine_records(engine_name, [r for r in records if r.engine == engine_name])
-        for engine_name in engines
+        for engine_name in engines_to_run
         if any(r.engine == engine_name for r in records)
     )
     bootstrap_vs_baseline = (
@@ -261,10 +299,13 @@ def run_evaluation(
 def _report_to_json_dict(report: EvaluationReport) -> dict:
     return {
         "metadata": report.metadata.to_dict(),
+        "primary_metric": report.metadata.config.get("primary_metric"),
+        "exploratory_metrics": [m for m in BOOTSTRAP_METRICS if m != report.metadata.config.get("primary_metric")],
         "provenance": {
             "main_eval_case_ids": [case.case_id for case in report.provenance.main_eval_cases],
             "excluded_leaked_case_ids": [case.case_id for case in report.provenance.excluded_leaked_cases],
             "cases_with_unknown_gabarito_ids": report.provenance.cases_with_unknown_gabarito_ids,
+            "methodology_warnings": report.provenance.methodology_warnings,
         },
         "records": [asdict(record) for record in report.records],
         "aggregates": [asdict(aggregate) for aggregate in report.aggregates],
@@ -297,16 +338,36 @@ def write_report(report: EvaluationReport, output_dir: str | Path) -> Path:
 
 
 def _render_markdown_summary(report: EvaluationReport) -> str:
+    primary_metric = report.metadata.config.get("primary_metric", "recall_at_10")
     lines = ["# Resumo da avaliacao comparativa de motores", ""]
-    lines.append(f"Casos na avaliacao principal: {len(report.provenance.main_eval_cases)}")
-    lines.append(f"Casos excluidos (usados na construcao da base): {len(report.provenance.excluded_leaked_cases)}")
+    lines.append(
+        f"**Metrica principal (pre-registrada antes dos dados reais): `{primary_metric}` "
+        "(Revocacao@10).** As demais metricas desta tabela sao exploratorias: ajudam a "
+        "entender o comportamento dos motores, mas nao decidem a troca do motor atual."
+    )
     lines.append("")
-    lines.append("| Motor | Casos | P@5 | P@10 | R@5 | R@10 | nDCG@10 | MRR | IDs invalidos | Tempo (s) | Reprodutibilidade |")
+    lines.append(f"Casos na avaliacao principal: {len(report.provenance.main_eval_cases)}")
+    lines.append(f"Casos excluidos (usados na construcao/revisao da base): {len(report.provenance.excluded_leaked_cases)}")
+    if report.provenance.methodology_warnings:
+        lines.append("")
+        lines.append("### Avisos de metodologia de anotacao (nao bloqueiam a avaliacao)")
+        for case_id, warnings in sorted(report.provenance.methodology_warnings.items()):
+            for warning in warnings:
+                lines.append(f"- `{case_id}`: {warning}")
+    lines.append("")
+    lines.append(
+        "| Motor | Casos | P@5 (exploratoria) | P@10 (exploratoria) | R@5 (exploratoria) | "
+        "**R@10 (principal)** | nDCG@10 (exploratoria) | MRR (exploratoria) | IDs invalidos | "
+        "Tempo (s) | Reprodutibilidade |"
+    )
     lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for aggregate in report.aggregates:
+        label = aggregate.engine
+        if aggregate.engine == PRODUCTION_RULES_ENGINE:
+            label += " (cortes de producao, informativo)"
         lines.append(
-            "| {engine} | {n} | {p5:.3f} | {p10:.3f} | {r5} | {r10} | {ndcg} | {mrr:.3f} | {invalid} | {time:.4f} | {repro:.3f} |".format(
-                engine=aggregate.engine,
+            "| {engine} | {n} | {p5:.3f} | {p10:.3f} | {r5} | **{r10}** | {ndcg} | {mrr:.3f} | {invalid} | {time:.4f} | {repro:.3f} |".format(
+                engine=label,
                 n=aggregate.n_cases,
                 p5=aggregate.mean_precision_at_5,
                 p10=aggregate.mean_precision_at_10,
@@ -319,14 +380,26 @@ def _render_markdown_summary(report: EvaluationReport) -> str:
                 repro=aggregate.mean_reproducibility_exact_match_rate,
             )
         )
+        if aggregate.distinct_llm_reported_model_ids:
+            lines.append(
+                f"  - Identificador exato do modelo (reportado pelo servidor): "
+                f"{', '.join(aggregate.distinct_llm_reported_model_ids)}"
+            )
     lines.append("")
-    lines.append("## Bootstrap pareado vs. motor atual (regras)")
+    lines.append(
+        f"`{PRODUCTION_RULES_ENGINE}` e o motor atual com os mesmos cortes que o app mostra "
+        "ao usuario (`minimum_score` e limite por categoria); nao e um motor candidato e "
+        "fica fora do bootstrap abaixo -- esta na tabela so para contexto."
+    )
+    lines.append("")
+    lines.append(f"## Bootstrap pareado vs. motor atual (regras) -- metrica principal: `{primary_metric}`")
     lines.append("")
     for engine_name, metric_results in report.bootstrap_vs_baseline.items():
         lines.append(f"### {engine_name} vs. {BASELINE_ENGINE}")
         for metric, result in metric_results.items():
+            tag = "principal" if metric == primary_metric else "exploratoria"
             lines.append(
-                f"- {metric}: diferenca media = {result.observed_mean_diff:+.4f}, "
+                f"- {metric} ({tag}): diferenca media = {result.observed_mean_diff:+.4f}, "
                 f"IC {result.confidence:.0%} = [{result.ci_lower:+.4f}, {result.ci_upper:+.4f}], "
                 f"p (bootstrap) ~= {result.p_value_two_sided:.4f}, n={result.n_cases}"
             )

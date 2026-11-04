@@ -32,10 +32,13 @@ class BM25Config:
 
 
 # Modelo fixo e versao (revision) do motor de embeddings "de producao".
-# Pin explicito para reprodutibilidade: trocar o modelo exige editar aqui
-# (e registrar a mudanca no relatorio, nunca silenciosamente).
+# Pin explicito a um hash de commit (nunca a uma branch como "main", que muda
+# de conteudo sob o mesmo nome) para reprodutibilidade: trocar o modelo exige
+# editar aqui -- e registrar a mudanca no relatorio, nunca silenciosamente.
+# Hash obtido em https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+# (commit em 2026-01-28); atualizar junto com a data e o motivo se o modelo for trocado.
 DEFAULT_EMBEDDING_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-DEFAULT_EMBEDDING_MODEL_REVISION = "main"
+DEFAULT_EMBEDDING_MODEL_REVISION = "e8f8c211226b894fcb81acc59f3b34ba3efd5f42"
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,17 @@ class LLMConfig:
             )
 
 
+# Metrica principal, definida a priori (antes de olhar os dados reais) para
+# decidir se um motor candidato substitui o motor atual. Fixada em
+# Revocacao@10: numa biblioteca curada e pequena (62 riscos), nao achar um
+# risco relevante (falso negativo) e o erro mais caro -- o excesso de
+# sugestoes e filtrado por revisao humana de qualquer forma. As demais
+# metricas (precisao@5/@10, revocacao@5, nDCG@10, MRR) sao exploratorias:
+# ajudam a entender o comportamento dos motores, mas nao decidem a troca.
+PRIMARY_METRIC = "recall_at_10"
+EXPLORATORY_METRICS = ("precision_at_5", "precision_at_10", "recall_at_5", "ndcg_at_10", "mrr")
+
+
 @dataclass(frozen=True)
 class RunConfig:
     seed: int = 20260101
@@ -77,6 +91,7 @@ class RunConfig:
     reproducibility_repeats: int = 3
     bootstrap_resamples: int = 10_000
     bootstrap_confidence: float = 0.95
+    primary_metric: str = PRIMARY_METRIC
     bm25: BM25Config = field(default_factory=BM25Config)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)

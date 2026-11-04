@@ -12,5 +12,7 @@
   },
   "gabarito_ids": ["R001", "R006", "R059"],
   "used_to_build_base": false,
-  "provenance_notes": "Caso sintetico de exemplo; nao alimentou data/riscos_base.csv."
+  "provenance_notes": "Caso sintetico de exemplo; nao alimentou, revisou nem ajustou data/riscos_base.csv (texto, palavras-chave, pesos ou limiares).",
+  "context_predates_risk_map": true,
+  "annotator_count": 2
 }

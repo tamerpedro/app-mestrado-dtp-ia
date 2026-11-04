@@ -40,7 +40,9 @@ motor.
   },
   "gabarito_ids": ["R001", "R006"],
   "used_to_build_base": false,
-  "provenance_notes": "opcional: de onde veio o caso, como o gabarito foi obtido"
+  "provenance_notes": "opcional: de onde veio o caso, como o gabarito foi obtido",
+  "context_predates_risk_map": true,
+  "annotator_count": 2
 }
 ```
 
@@ -49,10 +51,31 @@ motor.
   carregada (ex.: risco relevante que a biblioteca ainda nao cobre) -- isso
   e reportado, nao descartado, pois limita o recall maximo alcancavel do
   caso por qualquer motor.
-- `used_to_build_base`: **`true`** se este caso foi usado para construir ou
-  revisar `data/riscos_base.csv` (por exemplo, um dos seus riscos foi
-  copiado para a biblioteca). Esses casos sao automaticamente excluidos da
-  avaliacao principal -- ver "Controle de vazamento" abaixo.
+- `used_to_build_base`: **`true`** se este caso alimentou a construcao **ou
+  a revisao/ajuste** de `data/riscos_base.csv`, de qualquer forma -- nao so
+  "um risco foi copiado literalmente para a biblioteca". Conta tambem se o
+  caso foi usado para: revisar o *texto* de um risco existente (titulo,
+  causa, consequencia, acoes); calibrar suas *palavras-chave*; calibrar seus
+  *pesos* (`probabilidade_padrao` / `impacto_padrao`); ou calibrar os
+  *limiares* do motor de regras (`minimum_score`, limite por categoria) ou
+  parametros equivalentes de outro motor. Qualquer uma dessas formas de
+  influencia vaza o gabarito do caso para dentro dos motores. Esses casos
+  sao automaticamente excluidos da avaliacao principal -- ver "Controle de
+  vazamento" abaixo. Em caso de dúvida sobre se um caso se qualifica, marque
+  `true` (o padrão seguro é excluir, nunca incluir por engano).
+- `context_predates_risk_map` (opcional, recomendado): `true` se o `context`
+  foi extraido de documentos **anteriores** ao mapa de riscos final (termo
+  de referencia, estudo tecnico preliminar, edital) -- nunca do proprio mapa
+  ou de material produzido depois dele. Ver "Proveniencia do contexto e do
+  gabarito" abaixo.
+- `annotator_count` (opcional, recomendado): quantas pessoas anotaram o
+  gabarito de forma independente e sem acesso as sugestoes de nenhum motor.
+  Preferencialmente `>= 2`.
+
+Os dois ultimos campos sao opcionais (casos antigos continuam carregando sem
+eles) mas fortemente recomendados: sua ausencia gera um aviso informativo em
+`ProvenanceReport.methodology_warnings`, que aparece no relatorio mas nao
+bloqueia a avaliacao.
 
 Veja `evaluation/cases/synthetic/case_example_001.json` para um exemplo
 completo (fictício).
@@ -68,16 +91,47 @@ completo (fictício).
 
 ## Controle de vazamento (proveniencia)
 
-Um caso com `used_to_build_base: true` nunca entra na avaliacao principal:
-se um risco do mapa real de um caso foi copiado para a biblioteca, qualquer
-motor que também veja essa biblioteca "aprenderia" o próprio gabarito do
-caso, inflando artificialmente a métrica. `evaluation/cases/provenance.py`
-faz esse filtro e também registra:
+Um caso com `used_to_build_base: true` nunca entra na avaliacao principal.
+Isso cobre nao so "um risco do mapa real foi copiado para a biblioteca", mas
+qualquer caso usado para revisar o texto, as palavras-chave, os pesos ou os
+limiares de um risco -- qualquer uma dessas formas de influencia faz o motor
+"aprender", via a biblioteca ou seus parâmetros, o próprio gabarito do caso,
+inflando artificialmente a métrica (ver docstring de `EvalCase.used_to_build_base`
+em `cases/schema.py`). `evaluation/cases/provenance.py` faz esse filtro e
+também registra:
 
 - quais casos foram excluídos por esse motivo (`excluded_leaked_cases`);
 - quais IDs de gabarito não existem na biblioteca carregada
   (`cases_with_unknown_gabarito_ids`), para transparência sobre o teto de
-  recall de cada caso.
+  recall de cada caso;
+- avisos informativos de metodologia de anotação não seguida/informada por
+  caso (`methodology_warnings`) -- ver seção "Proveniência do contexto e do
+  gabarito" abaixo.
+
+## Proveniência do contexto e do gabarito
+
+Dois cuidados metodológicos, para evitar vazamento por retrospectiva
+(*hindsight bias*) e ancoragem na anotação:
+
+1. **O `context` de um caso deve vir de documentos anteriores ao mapa de
+   riscos final** (termo de referência, estudo técnico preliminar, edital
+   etc.), nunca do próprio mapa de riscos ou de material produzido depois
+   dele. Se o contexto já incorpora conhecimento do mapa final, qualquer
+   motor "vê" pistas que não existiam no momento real da decisão, inflando
+   a qualidade aparente das sugestões. Registre isso em
+   `context_predates_risk_map: true` no caso.
+2. **O gabarito deve ser anotado sem acesso às saídas de nenhum motor**
+   (nem do motor atual de regras, nem dos demais) -- quem anota a lista de
+   IDs relevantes não deve ver sugestões automáticas antes de decidir,
+   senão a anotação ancora no que o motor já sugeriu. Preferencialmente,
+   use **dois anotadores independentes** e registre `annotator_count: 2`
+   (ou mais) -- isso permite checar concordância entre anotadores, o que
+   este pacote não calcula automaticamente hoje, mas que o campo deixa
+   registrado para análise manual.
+
+Casos sem esses campos continuam sendo aceitos (compatibilidade com casos
+já coletados), mas geram aviso em `ProvenanceReport.methodology_warnings`,
+incluído no relatório (`summary.md` e `report.json`).
 
 ## Motores em detalhe
 
@@ -89,31 +143,53 @@ desempate de `suggest_risks` -- `(score, categoria, id)` decrescente -- mas
 **sem** aplicar `minimum_score` nem o limite por categoria
 (`MAX_SUGGESTIONS_PER_CATEGORY`), que no app são políticas de quantas
 sugestões *mostrar*, não a qualidade do ranking em si. Isso faz o ranking
-comparável aos outros motores (que também devolvem o ranking completo).
+comparável aos outros motores (que também devolvem o ranking completo) e é
+o que entra no bootstrap pareado como linha de base.
 
-Para obter os números "como o usuário realmente vê" (com os cortes de
-produção), use `rules_engine.rank_as_shown_in_production(...)` -- disponível
-mas não usado no cálculo principal.
+Além desse ranking completo, **todo relatório também inclui `rules_production`**:
+o mesmo motor `rules`, mas com os cortes de produção aplicados
+(`rules_engine.rank_as_shown_in_production`, com `minimum_score` e o limite
+por categoria) -- ou seja, exatamente o que o usuário vê hoje no app. É
+calculado automaticamente sempre que `rules` roda (`runner.PRODUCTION_RULES_ENGINE`)
+e aparece como uma linha adicional na tabela do relatório, mas **fica fora**
+do bootstrap pareado (não é um motor candidato a substituir o atual).
+
+> Atenção ao interpretar precisão@k de `rules_production`: como o motor
+> pode devolver menos de *k* sugestões (por causa dos cortes), precisão@k é
+> sempre calculada dividindo por *k* (não pelo tamanho da lista devolvida) --
+> ver `metrics/ranking.py::precision_at_k` -- para não inflar artificialmente
+> a métrica de um motor que decidiu sugerir pouco.
+
+### Texto por risco, idêntico nos três motores de ranking por texto
+
+`bm25`, `embedding` e `llm` usam exatamente o mesmo texto por risco --
+`text_utils.risk_document_text`: título + causa + consequência +
+palavras-chave + tipos de contratação + categoria -- e a mesma consulta a
+partir do contexto -- `text_utils.context_query_text`: objeto + contexto +
+tipo de contratação + criticidade + modalidade + prazo. Isso garante que os
+três vejam exatamente a mesma informação sobre cada risco; nenhum motor tem
+acesso a um resumo mais rico (ou mais pobre) que outro. `bm25_engine.py` e
+`embedding_engine.py` tokenizam esse texto (minúsculas, sem acento, tokens
+alfanuméricos); `llm_engine.py` o usa como está, por candidato, no prompt.
 
 ### `bm25`
 
-Documento de cada risco = título + causa + consequência + palavras-chave +
-tipos de contratação + categoria. Consulta = objeto + contexto + tipo de
-contratação + criticidade + modalidade + prazo. Tokenização simples
-(minúsculas, sem acento, tokens alfanuméricos) em `evaluation/text_utils.py`.
 Parâmetros `k1`/`b` em `config.BM25Config` (padrão `k1=1.5`, `b=0.75`),
 registrados em todo relatório.
 
 ### `embedding`
 
-Mesmos textos de documento/consulta do BM25, mas comparados por
-similaridade de cosseno entre embeddings. O backend de produção
-(`SentenceTransformerBackend`) usa um **modelo fixo e versionado**
-(`config.DEFAULT_EMBEDDING_MODEL_NAME` + `DEFAULT_EMBEDDING_MODEL_REVISION`,
-hoje `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2@main`),
-executado **localmente** via `sentence-transformers`
+Comparação por similaridade de cosseno entre embeddings do texto acima. O
+backend de produção (`SentenceTransformerBackend`) usa um **modelo fixo,
+pinado em um hash de commit** (nunca em uma branch como `"main"`, cujo
+conteúdo pode mudar sob o mesmo nome) -- `config.DEFAULT_EMBEDDING_MODEL_NAME`
++ `DEFAULT_EMBEDDING_MODEL_REVISION`, hoje
+`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2@e8f8c211226b894fcb81acc59f3b34ba3efd5f42`
+-- executado **localmente** via `sentence-transformers`
 (`evaluation/requirements-embeddings.txt`, dependência opcional e pesada --
-não é instalada por padrão). Nenhum texto sai da máquina.
+não é instalada por padrão). Nenhum texto sai da máquina. Trocar o modelo
+exige editar essas duas constantes em `config.py` e registrar o motivo no
+commit -- nunca silenciosamente.
 
 Para testes automatizados e uso offline sem baixar o modelo, existe
 `HashingEmbeddingBackend`: um backend local, determinístico, sem
@@ -127,10 +203,11 @@ explícito; o padrão da CLI é `sentence-transformers`.
 
 Desligado por padrão (`config.LLMConfig.enabled=False`). Quando habilitado,
 monta um prompt com os campos do `ContractContext` e a lista de candidatos
-(id, título, categoria, palavras-chave) e pede ao modelo uma lista JSON de
-IDs ordenada por relevância. Qualquer ID que não esteja entre os candidatos
-é descartado do ranking usado nas métricas de qualidade, mas contabilizado
-na **taxa de IDs inválidos** (`metrics/validity.py`).
+(id + o mesmo texto de risco usado pelo BM25/embeddings) e pede ao modelo
+uma lista JSON de IDs ordenada por relevância. Qualquer ID que não esteja
+entre os candidatos é descartado do ranking usado nas métricas de
+qualidade, mas contabilizado na **taxa de IDs inválidos**
+(`metrics/validity.py`).
 
 Endpoint padrão: `http://localhost:11434/v1/chat/completions` (compatível
 com a API de chat da OpenAI -- Ollama, llama.cpp server, vLLM etc.). Um
@@ -139,12 +216,46 @@ endpoint que não resolva para `localhost`/`127.0.0.1`/`::1`/`*.localhost` é
 explicitamente (`evaluation/config.py`, `LLMConfigError`). Nunca envia dados
 a um serviço externo por padrão.
 
+**Identificador exato do modelo.** `config.LLMConfig.model` é só a tag que
+*pedimos* ao servidor (ex.: `"llama3.1:8b-instruct"`); o servidor pode
+resolvê-la para uma versão/digest mais específica. `LocalHTTPLLMClient`
+captura o campo `"model"` da própria resposta da API (compatível com a da
+OpenAI) em `last_model_id`, e `llm_engine.rank()` o registra em
+`RankResult.reported_model_id`. O relatório traz isso em dois níveis: por
+caso (`CaseEngineRecord.llm_reported_model_id`) e agregado
+(`EngineAggregate.distinct_llm_reported_model_ids`, os valores distintos
+vistos na execução) -- assim o relatório audita o modelo que *de fato*
+respondeu, não só o nome configurado. Um cliente customizado que não exponha
+`last_model_id` simplesmente não preenche esse campo (fica `None`).
+
+## Métrica principal e métricas exploratórias
+
+Antes de rodar com dados reais, **`config.PRIMARY_METRIC = "recall_at_10"`
+(Revocação@10) foi definida como a métrica principal** -- a única usada
+para decidir se um motor candidato substitui o motor atual de regras. A
+escolha é pré-registrada (decidida antes de olhar os números) para evitar
+"metric shopping" -- escolher depois a métrica que favorece o resultado
+desejado. A justificativa: numa biblioteca curada e pequena (62 riscos),
+*não* sugerir um risco relevante (falso negativo) é o erro mais caro; o
+excesso de sugestões é filtrado pela revisão humana de qualquer forma, e
+Revocação@10 é a métrica mais sensível a esse tipo de erro na janela que o
+app efetivamente mostra.
+
+Todas as demais métricas abaixo são **exploratórias**: ajudam a entender o
+comportamento de cada motor (ex.: um motor pode ter Revocação@10 parecida
+mas Precisão@5 muito pior, sinal de que ele acerta mas enterra os riscos
+certos mais abaixo no ranking), mas não decidem a troca. O relatório
+(`summary.md`, `report.json`) rotula explicitamente qual é qual --
+`report["primary_metric"]` / `report["exploratory_metrics"]` no JSON.
+
 ## Métricas (por caso e por motor)
 
 Calculadas em `evaluation/metrics/`:
 
 - **Precisão@k** e **Revocação@k**, para `k = 5` e `k = 10`
-  (`metrics/ranking.py`).
+  (`metrics/ranking.py`). Precisão@k é sempre dividida por `k` (não pelo
+  tamanho da lista devolvida), para não inflar a métrica de um motor que
+  devolve menos de `k` itens (caso de `rules_production`, ver abaixo).
 - **nDCG@10** (ganho binário, desconto logarítmico padrão).
 - **MRR** (posição do primeiro item relevante, sem corte).
 - **Taxa de IDs inválidos** -- fração dos IDs devolvidos pelo motor antes da
@@ -164,7 +275,10 @@ Calculadas em `evaluation/metrics/`:
 `evaluation/metrics/bootstrap.py` implementa um bootstrap pareado por caso
 (reamostragem com reposição dos *casos*, preservando o pareamento com o
 motor `rules`) para cada métrica em `runner.BOOTSTRAP_METRICS`
-(precisão@5/@10, revocação@5/@10, nDCG@10, MRR). Produz a diferença média
+(precisão@5/@10, revocação@5/@10, nDCG@10, MRR) -- sempre com a métrica
+principal (`recall_at_10`) primeiro, as demais em seguida, marcadas como
+exploratórias no relatório (`summary.md`). `rules_production` fica fora
+dessa comparação (ver seção `rules` acima). Produz a diferença média
 observada, um intervalo de confiança (padrão 95%, `config.RunConfig.bootstrap_confidence`)
 e uma aproximação bootstrap do p-valor bicaudal. Implementado só com a
 biblioteca padrão (`random`, `statistics`) -- sem numpy.
@@ -175,7 +289,11 @@ Todo relatório (`evaluation/run_metadata.py`) inclui: versão do Python,
 plataforma, versões de pacotes relevantes instalados (`requests`,
 `sentence-transformers`, `torch`, `pytest`), commit git do app no momento da
 execução, e a configuração completa (`RunConfig`) -- sementes, parâmetros do
-BM25, modelo/revision de embeddings, configuração do LLM (sem credenciais).
+BM25, modelo/revision (hash de commit) de embeddings, a tag configurada do
+LLM (sem credenciais) e a métrica principal. O identificador *exato* do
+modelo LLM que respondeu (podendo diferir da tag configurada) é registrado
+separadamente, por caso e agregado -- ver "Identificador exato do modelo"
+na seção `llm` acima.
 
 ## Rodando a avaliação
 

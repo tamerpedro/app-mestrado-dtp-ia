@@ -23,6 +23,11 @@ class RankResult:
     """IDs devolvidos pelo motor antes de filtrar os invalidos (so difere de
     ``ranked_ids`` para o motor LLM; usado para calcular a taxa de IDs
     invalidos). Para os demais motores, igual a ``ranked_ids``."""
+    reported_model_id: str | None = None
+    """Identificador exato do modelo, conforme devolvido pelo proprio servidor
+    na resposta da chamada (ex.: tag/digest resolvido, que pode diferir do
+    nome configurado em ``LLMConfig.model``). So preenchido pelo motor LLM;
+    ``None`` para os demais motores ou quando o servidor nao informa."""
 
     def __post_init__(self) -> None:
         if not self.raw_ids_before_validation:
