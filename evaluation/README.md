@@ -20,6 +20,9 @@ TIC, comparando quatro motores:
 `evaluation/` tem dependencias proprias (`evaluation/requirements.txt`,
 `evaluation/requirements-embeddings.txt`), separadas de `requirements.txt`
 do app, e não altera o comportamento do app nem de `src/suggestions.py`.
+Tambem inclui uma interface Streamlit **separada** de `app.py`
+(`evaluation/ui.py`) para cadastrar casos, anotar o gabarito e rodar a
+avaliacao sem usar a linha de comando -- ver "Interface Streamlit" abaixo.
 
 ## Entrada dos motores
 
@@ -324,10 +327,58 @@ Para habilitar o motor LLM contra um servidor local já em execução:
 python -m evaluation --enable-llm --llm-endpoint http://localhost:11434/v1/chat/completions --llm-model llama3.1:8b-instruct
 ```
 
+## Interface Streamlit (`evaluation/ui.py`)
+
+App Streamlit **separado** de `app.py`/`src/` (nao altera nada ali) para
+cadastrar casos, anotar o gabarito e rodar a avaliacao sem usar a linha de
+comando. Reutiliza o schema (`cases/schema.py`), o loader (`cases/loader.py`)
+e o runner (`runner.py`) existentes -- nao duplica validacao nem a logica
+dos motores.
+
+```bash
+streamlit run evaluation/ui.py --server.address 127.0.0.1
+```
+
+`--server.address 127.0.0.1` restringe o servidor a conexoes locais. **Isto
+nao e cosmetico: nunca rode esta interface numa instancia publica, acessivel
+pela rede, ou com `--server.address 0.0.0.0`, quando houver dados reais em
+`evaluation/cases/real/` ou em trafego com o motor LLM.** A interface nao
+tem autenticacao nem controle de acesso -- qualquer um que alcance o
+endereço/porta ve e edita os casos. Dados reais de contratacoes sao
+informacao sensivel (ver `.gitignore`, que ja os mantem fora do controle de
+versao); o mesmo cuidado vale para onde a interface roda.
+
+Três abas:
+
+1. **Casos** -- cadastra, edita e lista contratações (`ContractContext`,
+   `case_id`, `used_to_build_base`, `context_predates_risk_map`,
+   `annotator_count`, `provenance_notes`). Salvar grava um JSON por caso em
+   `evaluation/cases/real/`, validado pelo mesmo `cases.schema.case_from_dict`
+   usado pelo loader/runner -- um caso invalido (ex.: sem gabarito ainda)
+   nunca é escrito em disco; a interface mostra a mensagem de validação e
+   mantém o rascunho em memória para continuar editando.
+2. **Gabarito** -- marca, para o caso carregado, quais riscos de
+   `data/riscos_base.csv` aparecem no mapa real, com busca por ID, título ou
+   categoria. **Nunca mostra pontuação ou sugestão de nenhum motor** --
+   só os riscos da biblioteca e checkboxes, para manter a anotação cega (ver
+   "Proveniência do contexto e do gabarito" acima).
+3. **Avaliação** -- escolhe os motores (`rules` sempre inclui
+   `rules_production` automaticamente, como no resto do protocolo), roda
+   `evaluation.runner.run_evaluation` sobre os casos reais cadastrados e
+   exibe: o resumo por motor (com a métrica principal destacada), os
+   intervalos de confiança do bootstrap pareado, os avisos de metodologia de
+   anotação e, por caso e motor, os riscos encontrados e perdidos no top 10.
+   Ao escolher o backend `hashing` para embeddings, a interface mostra um
+   aviso de que os números dessa execução não são finais nem
+   representativos. O motor LLM continua desligado por padrão e só aceita
+   endpoint local, a menos que "permitir endpoint externo" seja marcado
+   explicitamente -- a mesma validação de `LLMConfig` (ver seção `llm`
+   acima), não duplicada na interface.
+
 ## Testes
 
 ```bash
-pip install -r requirements.txt   # pytest (requisito do app, ja usado pelos testes de evaluation)
+pip install -r requirements.txt   # pytest e streamlit (requisitos do app, ja usados pelos testes de evaluation)
 pytest evaluation/tests
 ```
 
@@ -335,3 +386,9 @@ Os testes usam riscos e casos sintéticos (`evaluation/tests/conftest.py`,
 `evaluation/cases/synthetic/`) e dublês locais para o backend de embeddings
 (`HashingEmbeddingBackend`) e o cliente LLM (`FakeLLMClient`), então não
 exigem rede, modelo baixado nem servidor LLM rodando.
+`evaluation/tests/test_ui.py` testa só a lógica pura de `ui.py` (validação,
+persistência, filtro de riscos, montagem de `RunConfig`) -- as funções que
+chamam a API do Streamlit (`render_*`/`main`) dependem de um runtime de app
+que não existe sob pytest e não são exercitadas por esses testes; foram
+verificadas manualmente rodando a interface de ponta a ponta (cadastro de
+caso, anotação de gabarito, execução da avaliação).

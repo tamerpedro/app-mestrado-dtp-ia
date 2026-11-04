@@ -12,3 +12,7 @@ requests>=2.31          # motor LLM (LocalHTTPLLMClient): chamada HTTP ao endpoi
 
 # Motor de embeddings "de producao" (modelo fixo, execucao local):
 # -r requirements-embeddings.txt
+
+# evaluation/ui.py (interface Streamlit) precisa de streamlit>=1.53, ja
+# listado em requirements.txt na raiz (usado por app.py) -- nao duplicado
+# aqui para evitar duas versoes pinadas do mesmo pacote.
