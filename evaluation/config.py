@@ -52,9 +52,13 @@ class EmbeddingConfig:
 class LLMConfig:
     enabled: bool = False
     endpoint: str = "http://localhost:11434/v1/chat/completions"
-    model: str = "llama3.1:8b-instruct"
+    model: str = "llama3.1:8b"
     allow_external: bool = False
-    timeout_s: float = 30.0
+    # 300s (nao 30s): contratos locais em CPU, sem GPU dedicada, podem levar
+    # bem mais que 30s para gerar a resposta completa -- um timeout curto
+    # derrubava a chamada antes do modelo terminar, inflando a taxa de
+    # respostas vazias/invalidas sem o modelo ter de fato falhado.
+    timeout_s: float = 300.0
     temperature: float = 0.0
     max_candidates: int = 62
 

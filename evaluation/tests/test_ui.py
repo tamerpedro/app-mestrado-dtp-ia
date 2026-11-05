@@ -187,13 +187,40 @@ def test_build_run_config_defaults_keep_llm_disabled_and_local():
         embedding_backend="hashing",
         llm_enabled=False,
         llm_endpoint="http://localhost:11434/v1/chat/completions",
-        llm_model="llama3.1:8b-instruct",
+        llm_model="llama3.1:8b",
         llm_allow_external=False,
     )
 
     assert config.engines == ("rules", "bm25")
     assert config.embedding.backend == "hashing"
     assert config.llm.enabled is False
+
+
+def test_build_run_config_defaults_timeout_to_300s():
+    config = build_run_config(
+        engines=("rules", "llm"),
+        embedding_backend="hashing",
+        llm_enabled=True,
+        llm_endpoint="http://localhost:11434/v1/chat/completions",
+        llm_model="llama3.1:8b",
+        llm_allow_external=False,
+    )
+
+    assert config.llm.timeout_s == 300.0
+
+
+def test_build_run_config_accepts_a_custom_timeout():
+    config = build_run_config(
+        engines=("rules", "llm"),
+        embedding_backend="hashing",
+        llm_enabled=True,
+        llm_endpoint="http://localhost:11434/v1/chat/completions",
+        llm_model="llama3.1:8b",
+        llm_allow_external=False,
+        llm_timeout_s=600.0,
+    )
+
+    assert config.llm.timeout_s == 600.0
 
 
 def test_build_run_config_rejects_non_local_llm_endpoint_without_allow_external():

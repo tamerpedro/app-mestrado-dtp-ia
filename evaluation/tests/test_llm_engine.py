@@ -82,13 +82,59 @@ def test_duplicate_valid_ids_are_deduplicated_keeping_first_occurrence(synthetic
     assert result.ranked_ids == ("S001", "S002")
 
 
-def test_malformed_response_yields_empty_ranking(synthetic_risks, security_context):
+def test_malformed_response_yields_empty_ranking_and_is_flagged_as_a_parse_failure(synthetic_risks, security_context):
     config = LLMConfig(enabled=True)
     client = FakeLLMClient("isto nao e JSON valido")
 
     result = llm_engine.rank(security_context, synthetic_risks, config, client=client)
 
     assert result.ranked_ids == ()
+    assert result.response_parse_failed is True
+
+
+@pytest.mark.parametrize("empty_response", ["", "   ", "\n\t"])
+def test_empty_response_yields_empty_ranking_and_is_flagged_as_a_parse_failure(
+    synthetic_risks, security_context, empty_response
+):
+    config = LLMConfig(enabled=True)
+    client = FakeLLMClient(empty_response)
+
+    result = llm_engine.rank(security_context, synthetic_risks, config, client=client)
+
+    assert result.ranked_ids == ()
+    assert result.response_parse_failed is True
+
+
+def test_valid_empty_list_response_is_not_a_parse_failure(synthetic_risks, security_context):
+    """Uma resposta valida "[]" significa "o modelo nao encontrou nenhum
+    risco relevante" -- isso e diferente de uma falha de resposta/parsing e
+    nao deve ser contado como tal."""
+    config = LLMConfig(enabled=True)
+    client = FakeLLMClient("[]")
+
+    result = llm_engine.rank(security_context, synthetic_risks, config, client=client)
+
+    assert result.ranked_ids == ()
+    assert result.response_parse_failed is False
+
+
+def test_response_that_is_valid_json_but_not_a_list_is_a_parse_failure(synthetic_risks, security_context):
+    config = LLMConfig(enabled=True)
+    client = FakeLLMClient(json.dumps({"ids": ["S001"]}))
+
+    result = llm_engine.rank(security_context, synthetic_risks, config, client=client)
+
+    assert result.ranked_ids == ()
+    assert result.response_parse_failed is True
+
+
+def test_successful_response_is_not_a_parse_failure(synthetic_risks, security_context):
+    config = LLMConfig(enabled=True)
+    client = FakeLLMClient(json.dumps(["S001", "S002"]))
+
+    result = llm_engine.rank(security_context, synthetic_risks, config, client=client)
+
+    assert result.response_parse_failed is False
 
 
 def test_response_with_surrounding_text_is_still_parsed(synthetic_risks, security_context):
@@ -133,8 +179,13 @@ def test_reported_model_id_is_none_when_client_does_not_expose_it(synthetic_risk
     assert result.ranked_ids == ("S001",)
 
 
-def test_non_llm_rank_results_never_set_reported_model_id(synthetic_risks, security_context):
+def test_non_llm_rank_results_never_set_reported_model_id_or_parse_failed(synthetic_risks, security_context):
     from evaluation.engines import bm25_engine, rules_engine
 
-    assert rules_engine.rank(security_context, synthetic_risks).reported_model_id is None
-    assert bm25_engine.rank(security_context, synthetic_risks).reported_model_id is None
+    rules_result = rules_engine.rank(security_context, synthetic_risks)
+    bm25_result = bm25_engine.rank(security_context, synthetic_risks)
+
+    assert rules_result.reported_model_id is None
+    assert rules_result.response_parse_failed is False
+    assert bm25_result.reported_model_id is None
+    assert bm25_result.response_parse_failed is False

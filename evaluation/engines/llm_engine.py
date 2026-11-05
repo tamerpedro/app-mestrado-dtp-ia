@@ -11,11 +11,19 @@ biblioteca carregada -- qualquer ID fora dessa lista e descartado do
 ranking e contado na taxa de IDs invalidos (ver ``metrics/validity.py``).
 Isso vale tanto para um LLM real quanto para o client falso usado nos
 testes.
+
+Uma resposta vazia ou com JSON invalido tambem vira um ranking vazio (nao
+ha nada para sugerir), mas isso e registrado explicitamente em
+``RankResult.response_parse_failed`` -- nunca fica silencioso. O runner e a
+interface contam essas falhas por caso e as mostram no relatorio (ver
+``runner.CaseEngineRecord.llm_response_parse_failed`` e
+``EngineAggregate.llm_response_parse_failure_count``).
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Protocol
 
 from src.models import ContractContext, RiskItem
@@ -104,21 +112,34 @@ def _build_user_prompt(context: ContractContext, risks: list[RiskItem], max_cand
     )
 
 
-def _parse_ids(raw_response: str) -> tuple[str, ...]:
+@dataclass(frozen=True)
+class _ParsedResponse:
+    ids: tuple[str, ...]
+    parse_failed: bool
+    """``True`` quando a resposta veio vazia ou nao pode ser interpretada
+    como uma lista JSON -- distinto de uma resposta valida que lista zero
+    IDs (``"[]"``), que e sucesso, nao falha."""
+
+
+def _parse_ids(raw_response: str | None) -> _ParsedResponse:
+    text = (raw_response or "").strip()
+    if not text:
+        return _ParsedResponse(ids=(), parse_failed=True)
+
     try:
-        parsed = json.loads(raw_response)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
-        start, end = raw_response.find("["), raw_response.rfind("]")
+        start, end = text.find("["), text.rfind("]")
         if start == -1 or end == -1 or end < start:
-            return ()
+            return _ParsedResponse(ids=(), parse_failed=True)
         try:
-            parsed = json.loads(raw_response[start : end + 1])
+            parsed = json.loads(text[start : end + 1])
         except json.JSONDecodeError:
-            return ()
+            return _ParsedResponse(ids=(), parse_failed=True)
 
     if not isinstance(parsed, list):
-        return ()
-    return tuple(str(item) for item in parsed)
+        return _ParsedResponse(ids=(), parse_failed=True)
+    return _ParsedResponse(ids=tuple(str(item) for item in parsed), parse_failed=False)
 
 
 def rank(
@@ -136,7 +157,8 @@ def rank(
     client = client or LocalHTTPLLMClient(config)
     user_prompt = _build_user_prompt(context, risks, config.max_candidates)
     raw_response = client.complete(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
-    raw_ids = _parse_ids(raw_response)
+    parsed = _parse_ids(raw_response)
+    raw_ids = parsed.ids
     reported_model_id = getattr(client, "last_model_id", None)
 
     known_ids = {risk.id for risk in risks}
@@ -151,4 +173,5 @@ def rank(
         ranked_ids=tuple(valid_ids),
         raw_ids_before_validation=raw_ids,
         reported_model_id=reported_model_id,
+        response_parse_failed=parsed.parse_failed,
     )

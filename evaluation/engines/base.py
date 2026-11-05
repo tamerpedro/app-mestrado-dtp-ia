@@ -28,6 +28,14 @@ class RankResult:
     na resposta da chamada (ex.: tag/digest resolvido, que pode diferir do
     nome configurado em ``LLMConfig.model``). So preenchido pelo motor LLM;
     ``None`` para os demais motores ou quando o servidor nao informa."""
+    response_parse_failed: bool = False
+    """``True`` quando a resposta bruta do motor veio vazia ou nao pode ser
+    interpretada como uma lista JSON de IDs -- nesse caso ``ranked_ids`` fica
+    vazio, mas por uma falha de resposta/parsing, nao porque o motor
+    legitimamente nao encontrou nenhum risco relevante (resposta ``"[]"``
+    valida conta como sucesso, nao como falha). So preenchido pelo motor
+    LLM; sempre ``False`` para os demais motores, que nunca falham ao
+    "interpretar" o proprio calculo."""
 
     def __post_init__(self) -> None:
         if not self.raw_ids_before_validation:

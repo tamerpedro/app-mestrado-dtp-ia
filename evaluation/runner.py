@@ -69,6 +69,11 @@ class CaseEngineRecord:
     pelo servidor (ver ``engines.base.RankResult.reported_model_id``).
     ``None`` para motores que nao sao o LLM, ou quando o servidor nao
     informa o campo."""
+    llm_response_parse_failed: bool = False
+    """``True`` quando a resposta do motor LLM para este caso veio vazia ou
+    nao pode ser interpretada como uma lista JSON de IDs (ver
+    ``engines.base.RankResult.response_parse_failed``). Sempre ``False``
+    para os demais motores."""
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,10 @@ class EngineAggregate:
     mean_execution_time_s: float
     mean_reproducibility_exact_match_rate: float
     distinct_llm_reported_model_ids: tuple[str, ...] = ()
+    llm_response_parse_failure_count: int = 0
+    """Quantos dos ``n_cases`` casos tiveram resposta vazia/JSON invalido do
+    motor LLM (ver ``CaseEngineRecord.llm_response_parse_failed``). Sempre 0
+    para motores que nao sao o LLM."""
 
 
 @dataclass(frozen=True)
@@ -162,6 +171,7 @@ def evaluate_case_with_engine(
         reproducibility_mean_top_k_jaccard=reproducibility.mean_top_k_jaccard,
         predicted_top_10=tuple(predicted[:10]),
         llm_reported_model_id=result.reported_model_id,
+        llm_response_parse_failed=result.response_parse_failed,
     )
 
 
@@ -169,6 +179,7 @@ def aggregate_engine_records(engine_name: str, records: list[CaseEngineRecord]) 
     distinct_model_ids = tuple(
         sorted({r.llm_reported_model_id for r in records if r.llm_reported_model_id is not None})
     )
+    parse_failure_count = sum(1 for r in records if r.llm_response_parse_failed)
     return EngineAggregate(
         engine=engine_name,
         n_cases=len(records),
@@ -182,6 +193,7 @@ def aggregate_engine_records(engine_name: str, records: list[CaseEngineRecord]) 
         mean_execution_time_s=statistics.fmean(r.execution_time_s for r in records),
         mean_reproducibility_exact_match_rate=statistics.fmean(r.reproducibility_exact_match_rate for r in records),
         distinct_llm_reported_model_ids=distinct_model_ids,
+        llm_response_parse_failure_count=parse_failure_count,
     )
 
 
@@ -384,6 +396,14 @@ def _render_markdown_summary(report: EvaluationReport) -> str:
             lines.append(
                 f"  - Identificador exato do modelo (reportado pelo servidor): "
                 f"{', '.join(aggregate.distinct_llm_reported_model_ids)}"
+            )
+        if aggregate.llm_response_parse_failure_count:
+            lines.append(
+                f"  - **Aviso**: resposta vazia ou JSON invalido em "
+                f"{aggregate.llm_response_parse_failure_count} de {aggregate.n_cases} caso(s) "
+                "(ranking vazio para esses casos -- nao e o motor dizendo que nao ha risco "
+                "relevante, e uma falha de resposta/parsing; ver timeout_s e OLLAMA_CONTEXT_LENGTH "
+                "em evaluation/README.md)."
             )
     lines.append("")
     lines.append(

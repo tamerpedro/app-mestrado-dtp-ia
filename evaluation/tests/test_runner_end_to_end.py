@@ -6,7 +6,13 @@ from src.risk_library import load_risks
 from evaluation.cases.schema import case_from_dict
 from evaluation.config import EmbeddingConfig, LLMConfig, RunConfig
 from evaluation.engines.embedding_engine import HashingEmbeddingBackend
-from evaluation.runner import run_evaluation, write_report
+from evaluation.runner import (
+    CaseEngineRecord,
+    aggregate_engine_records,
+    evaluate_case_with_engine,
+    run_evaluation,
+    write_report,
+)
 
 
 class FakeLLMClient:
@@ -124,8 +130,88 @@ def test_run_evaluation_includes_llm_when_enabled_and_tracks_invalid_ids(synthet
     llm_aggregate = next(agg for agg in report.aggregates if agg.engine == "llm")
     assert llm_aggregate.distinct_llm_reported_model_ids == ("llama3.1:8b-instruct-q4_0",)
 
+    # Resposta valida (mesmo com um ID fabricado misturado) nao e uma falha de resposta/parsing.
+    assert llm_record.llm_response_parse_failed is False
+    assert llm_aggregate.llm_response_parse_failure_count == 0
+
     # rules_production continua sendo calculado automaticamente ao lado de "rules".
     assert {record.engine for record in report.records} == {"rules", "rules_production", "llm"}
+
+
+def test_llm_response_parse_failures_are_tracked_per_case_and_aggregated(synthetic_risks, tmp_path):
+    """Resposta vazia ou JSON invalido do LLM nunca deve virar um ranking
+    vazio silencioso -- precisa ficar marcada no registro do caso e contada
+    no agregado do motor."""
+    risks_path = tmp_path / "riscos.csv"
+    _write_risks_csv(risks_path, synthetic_risks)
+
+    cases = [_case("eval-1", ["S001"]), _case("eval-2", ["S002"])]
+    config = RunConfig(
+        engines=("rules", "llm"),
+        llm=LLMConfig(enabled=True),
+        reproducibility_repeats=2,
+    )
+    client = FakeLLMClient("isto nao e JSON valido")  # mesma resposta malformada para todas as chamadas
+
+    report = run_evaluation(
+        risks_path=risks_path,
+        config=config,
+        include_real_cases=False,
+        extra_cases=cases,
+        llm_client=client,
+    )
+
+    llm_records = [record for record in report.records if record.engine == "llm"]
+    assert len(llm_records) == 2
+    assert all(record.llm_response_parse_failed for record in llm_records)
+    assert all(record.predicted_top_10 == () for record in llm_records)
+
+    llm_aggregate = next(agg for agg in report.aggregates if agg.engine == "llm")
+    assert llm_aggregate.llm_response_parse_failure_count == 2
+
+    # motores que nao sao o LLM nunca tem falha de resposta registrada.
+    rules_aggregate = next(agg for agg in report.aggregates if agg.engine == "rules")
+    assert rules_aggregate.llm_response_parse_failure_count == 0
+
+
+def test_evaluate_case_with_engine_flags_llm_parse_failure_on_a_single_case(synthetic_risks):
+    case = _case("eval-1", ["S001"])
+    known_ids = frozenset(risk.id for risk in synthetic_risks)
+    config = RunConfig(llm=LLMConfig(enabled=True), reproducibility_repeats=2)
+    client = FakeLLMClient("")  # resposta vazia
+
+    record = evaluate_case_with_engine(case, "llm", synthetic_risks, known_ids, config, llm_client=client)
+
+    assert record.llm_response_parse_failed is True
+    assert record.predicted_top_10 == ()
+    assert record.recall_at_10 == 0.0
+
+
+def test_aggregate_engine_records_counts_parse_failures_across_cases():
+    def _record(case_id: str, parse_failed: bool) -> CaseEngineRecord:
+        return CaseEngineRecord(
+            case_id=case_id,
+            engine="llm",
+            precision_at_5=0.0,
+            precision_at_10=0.0,
+            recall_at_5=0.0,
+            recall_at_10=0.0,
+            ndcg_at_10=0.0,
+            mrr=0.0,
+            invalid_id_rate=None,
+            execution_time_s=0.001,
+            reproducibility_exact_match_rate=1.0,
+            reproducibility_mean_top_k_jaccard=1.0,
+            predicted_top_10=(),
+            llm_response_parse_failed=parse_failed,
+        )
+
+    records = [_record("c1", True), _record("c2", False), _record("c3", True)]
+
+    aggregate = aggregate_engine_records("llm", records)
+
+    assert aggregate.llm_response_parse_failure_count == 2
+    assert aggregate.n_cases == 3
 
 
 def test_write_report_produces_json_csv_and_markdown(synthetic_risks, tmp_path):

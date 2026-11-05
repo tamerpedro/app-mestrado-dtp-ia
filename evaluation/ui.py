@@ -202,6 +202,7 @@ def build_run_config(
     llm_endpoint: str,
     llm_model: str,
     llm_allow_external: bool,
+    llm_timeout_s: float = LLMConfig().timeout_s,
 ) -> RunConfig:
     """Pode levantar ``LLMConfigError`` (endpoint LLM nao local sem
     ``allow_external`` explicito) -- a mesma validacao de seguranca de
@@ -214,6 +215,7 @@ def build_run_config(
             endpoint=llm_endpoint,
             model=llm_model,
             allow_external=llm_allow_external,
+            timeout_s=llm_timeout_s,
         ),
     )
 
@@ -423,6 +425,7 @@ def _render_summary_table(report: EvaluationReport) -> None:
             ),
             "Tempo (s)": round(aggregate.mean_execution_time_s, 4),
             "Reprodutibilidade": round(aggregate.mean_reproducibility_exact_match_rate, 3),
+            "Falhas de resposta (LLM)": aggregate.llm_response_parse_failure_count,
         }
         for aggregate in report.aggregates
     ]
@@ -433,6 +436,15 @@ def _render_summary_table(report: EvaluationReport) -> None:
             st.caption(
                 f"Identificador exato do modelo LLM reportado pelo servidor: "
                 f"{', '.join(aggregate.distinct_llm_reported_model_ids)}"
+            )
+        if aggregate.llm_response_parse_failure_count:
+            st.warning(
+                f"Motor `{aggregate.engine}`: resposta vazia ou JSON invalido em "
+                f"{aggregate.llm_response_parse_failure_count} de {aggregate.n_cases} caso(s) -- "
+                "ranking vazio para esses casos por falha de resposta/parsing, nao porque o "
+                "motor decidiu que nao ha risco relevante. Veja 'Riscos encontrados e "
+                "perdidos' abaixo para saber quais casos, e considere aumentar o timeout ou "
+                "checar o servidor LLM."
             )
 
 
@@ -477,7 +489,15 @@ def _render_found_missing(report: EvaluationReport) -> None:
     for record in report.records:
         gabarito = gabarito_by_case.get(record.case_id, frozenset())
         found, missing = compute_found_missing(record.predicted_top_10, gabarito)
-        with st.expander(f"{record.case_id} -- {record.engine}"):
+        label = f"{record.case_id} -- {record.engine}"
+        if record.llm_response_parse_failed:
+            label += " -- FALHA DE RESPOSTA (nao avaliar como ranking vazio legitimo)"
+        with st.expander(label):
+            if record.llm_response_parse_failed:
+                st.warning(
+                    "Resposta vazia ou JSON invalido do motor LLM para este caso -- os IDs "
+                    "'perdidos' abaixo nao refletem uma avaliacao real do motor."
+                )
             st.write(f"Encontrados: {', '.join(found) if found else '-'}")
             st.write(f"Perdidos: {', '.join(missing) if missing else '-'}")
 
@@ -508,8 +528,9 @@ def render_avaliacao_tab() -> None:
 
     include_llm = st.checkbox("llm (desligado por padrao)", value=False)
     llm_endpoint = "http://localhost:11434/v1/chat/completions"
-    llm_model = "llama3.1:8b-instruct"
+    llm_model = LLMConfig().model
     llm_allow_external = False
+    llm_timeout_s = LLMConfig().timeout_s
     if include_llm:
         st.warning(
             "O motor LLM envia o contexto da contratacao e os riscos candidatos ao "
@@ -519,6 +540,15 @@ def render_avaliacao_tab() -> None:
         )
         llm_endpoint = st.text_input("Endpoint LLM (compativel com API de chat da OpenAI)", value=llm_endpoint)
         llm_model = st.text_input("Modelo (tag pedida ao servidor)", value=llm_model)
+        llm_timeout_s = st.number_input(
+            "Timeout (s)",
+            min_value=1.0,
+            value=float(llm_timeout_s),
+            step=30.0,
+            help="Modelos locais em CPU podem levar bem mais que o padrao do cliente HTTP "
+            "(30s) para responder. Se o servidor Ollama estiver truncando respostas longas, "
+            "veja tambem o aviso sobre OLLAMA_CONTEXT_LENGTH em evaluation/README.md.",
+        )
         llm_allow_external = st.checkbox("Permitir endpoint NAO local (allow_external)", value=False)
 
     include_synthetic = st.checkbox(
@@ -548,6 +578,7 @@ def render_avaliacao_tab() -> None:
                     llm_endpoint=llm_endpoint,
                     llm_model=llm_model,
                     llm_allow_external=llm_allow_external,
+                    llm_timeout_s=llm_timeout_s,
                 )
             except LLMConfigError as exc:
                 st.error(str(exc))

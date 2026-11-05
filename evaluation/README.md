@@ -219,17 +219,56 @@ endpoint que não resolva para `localhost`/`127.0.0.1`/`::1`/`*.localhost` é
 explicitamente (`evaluation/config.py`, `LLMConfigError`). Nunca envia dados
 a um serviço externo por padrão.
 
+**Modelo e timeout padrão.** `config.LLMConfig.model` é `"llama3.1:8b"` e
+`config.LLMConfig.timeout_s` é `300` segundos -- um modelo local rodando em
+CPU, sem GPU dedicada, pode demorar bem mais que os 30s de um timeout HTTP
+"normal" para gerar a resposta completa; um timeout curto derrubava a
+chamada antes do modelo terminar e inflava a contagem de falhas abaixo sem
+o modelo ter de fato falhado. Ambos são editáveis: via `LLMConfig(model=...,
+timeout_s=...)` no código, via `--llm-model`/`--llm-endpoint` na CLI
+(`timeout_s` só pela CLI indiretamente, construindo um `RunConfig` próprio),
+ou pelos campos "Modelo" e "Timeout (s)" na aba Avaliação da interface
+(`evaluation/ui.py`).
+
 **Identificador exato do modelo.** `config.LLMConfig.model` é só a tag que
-*pedimos* ao servidor (ex.: `"llama3.1:8b-instruct"`); o servidor pode
-resolvê-la para uma versão/digest mais específica. `LocalHTTPLLMClient`
-captura o campo `"model"` da própria resposta da API (compatível com a da
-OpenAI) em `last_model_id`, e `llm_engine.rank()` o registra em
+*pedimos* ao servidor (ex.: `"llama3.1:8b"`); o servidor pode resolvê-la
+para uma versão/digest mais específica. `LocalHTTPLLMClient` captura o
+campo `"model"` da própria resposta da API (compatível com a da OpenAI) em
+`last_model_id`, e `llm_engine.rank()` o registra em
 `RankResult.reported_model_id`. O relatório traz isso em dois níveis: por
 caso (`CaseEngineRecord.llm_reported_model_id`) e agregado
 (`EngineAggregate.distinct_llm_reported_model_ids`, os valores distintos
 vistos na execução) -- assim o relatório audita o modelo que *de fato*
 respondeu, não só o nome configurado. Um cliente customizado que não exponha
 `last_model_id` simplesmente não preenche esse campo (fica `None`).
+
+**Resposta vazia ou JSON inválido nunca é silenciosa.** Se o servidor
+devolver uma resposta vazia, ou um texto que não dá para interpretar como
+uma lista JSON de IDs, o ranking daquele caso fica vazio -- mas isso é
+*sempre* registrado, não confundido com "o motor decidiu que não há risco
+relevante" (que seria uma resposta válida `"[]"`). `llm_engine._parse_ids`
+devolve essa distinção (`RankResult.response_parse_failed`); o runner conta
+quantos casos tiveram essa falha por execução
+(`EngineAggregate.llm_response_parse_failure_count`) e marca cada caso
+afetado (`CaseEngineRecord.llm_response_parse_failed`). O relatório
+(`summary.md`, `report.json`) e a aba Avaliação da interface mostram essa
+contagem com um aviso explícito -- nunca aparecem só como "0 riscos
+encontrados" indistinguível de uma resposta legítima.
+
+**Rodando com Ollama localmente.** O Ollama trunca o contexto em 2048
+tokens por padrão, o que é pouco para o prompt desta avaliação (contexto da
+contratação + até 62 candidatos com título, causa, consequência e
+palavras-chave) -- a resposta pode sair cortada ou vazia bem antes do
+modelo "decidir" algo, contando como falha de resposta na métrica acima.
+Suba o servidor com uma janela de contexto maior, por exemplo:
+
+```bash
+OLLAMA_CONTEXT_LENGTH=8192 ollama serve
+```
+
+(no Windows, via PowerShell: `$env:OLLAMA_CONTEXT_LENGTH=8192; ollama serve`).
+Ajuste o valor para cima se `config.LLMConfig.max_candidates` for aumentado
+ou se os riscos da biblioteca tiverem textos muito mais longos.
 
 ## Métrica principal e métricas exploratórias
 
@@ -321,10 +360,11 @@ demonstração com o caso de exemplo (não produz números representativos,
 python -m evaluation --include-synthetic --embedding-backend hashing
 ```
 
-Para habilitar o motor LLM contra um servidor local já em execução:
+Para habilitar o motor LLM contra um servidor local já em execução (ver
+"Rodando com Ollama localmente" acima para `OLLAMA_CONTEXT_LENGTH`):
 
 ```bash
-python -m evaluation --enable-llm --llm-endpoint http://localhost:11434/v1/chat/completions --llm-model llama3.1:8b-instruct
+python -m evaluation --enable-llm --llm-endpoint http://localhost:11434/v1/chat/completions --llm-model llama3.1:8b
 ```
 
 ## Interface Streamlit (`evaluation/ui.py`)
@@ -373,7 +413,12 @@ Três abas:
    representativos. O motor LLM continua desligado por padrão e só aceita
    endpoint local, a menos que "permitir endpoint externo" seja marcado
    explicitamente -- a mesma validação de `LLMConfig` (ver seção `llm`
-   acima), não duplicada na interface.
+   acima), não duplicada na interface. Quando habilitado, o campo "Timeout
+   (s)" permite ajustar `LLMConfig.timeout_s` (padrão 300) sem editar
+   código. Se algum caso tiver resposta vazia ou JSON inválido do LLM, a
+   interface mostra a contagem de falhas por motor e marca o caso
+   especificamente na lista de riscos encontrados/perdidos (ver "Resposta
+   vazia ou JSON inválido nunca é silenciosa" na seção `llm` acima).
 
 ## Testes
 
