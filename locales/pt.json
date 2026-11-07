@@ -1,4 +1,5 @@
 {
+  "action.generate": "Gerar sugestões",
   "ai.partial_failure": "A IA falhou para {count} categoria(s) ({detail}); essas sugestões seguem apenas com o risco da biblioteca.",
   "ai.unavailable": "IA indisponível ({detail}). A avaliação segue apenas com os riscos da biblioteca.",
   "app.kicker": "Dataprev | Contratações de TIC",
@@ -41,6 +42,7 @@
   "download.latex": "Baixar LaTeX",
   "download.word": "Baixar Word",
   "empty.list": "Nenhum risco nesta lista.",
+  "empty.not_generated": "Preencha os dados da contratação na barra lateral e clique em \"Gerar sugestões\" para começar a avaliação.",
   "empty.suggested": "Nenhum risco sugerido.",
   "error.load_library": "Não foi possível carregar a biblioteca de riscos: {detail}",
   "export.pt_only": "Os arquivos baixados ainda são gerados em português; a exportação em inglês está prevista para uma fase seguinte.",
@@ -150,6 +152,7 @@
   "reveal.ai": "Inteligência artificial",
   "reveal.biblioteca": "Biblioteca",
   "reveal.edited": "Editados",
+  "reveal.ia": "Inteligência artificial",
   "reveal.library": "Da biblioteca",
   "reveal.manual": "Manual",
   "reveal.manual_metric": "Manuais",

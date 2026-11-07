@@ -1,4 +1,5 @@
 {
+  "action.generate": "Generate suggestions",
   "ai.partial_failure": "The AI failed for {count} categories ({detail}); those suggestions show only the library risk.",
   "ai.unavailable": "AI unavailable ({detail}). The evaluation continues with library risks only.",
   "app.kicker": "Dataprev | ICT Procurement",
@@ -41,6 +42,7 @@
   "download.latex": "Download LaTeX",
   "download.word": "Download Word",
   "empty.list": "No risks in this list.",
+  "empty.not_generated": "Fill in the procurement details in the sidebar and click \"Generate suggestions\" to start the evaluation.",
   "empty.suggested": "No suggested risks.",
   "error.load_library": "Could not load the risk library: {detail}",
   "export.pt_only": "The downloaded files are still generated in Portuguese; English export is planned for a later phase.",
@@ -150,6 +152,7 @@
   "reveal.ai": "Artificial intelligence",
   "reveal.biblioteca": "Library",
   "reveal.edited": "Edited",
+  "reveal.ia": "Artificial intelligence",
   "reveal.library": "From the library",
   "reveal.manual": "Manual",
   "reveal.manual_metric": "Manual",

@@ -26,6 +26,23 @@ def _inclusion_checkboxes(at: AppTest):
     return [checkbox for checkbox in at.checkbox if checkbox.key and checkbox.key.startswith("incl_")]
 
 
+def _generate(at: AppTest) -> AppTest:
+    """Clica em 'Gerar sugestoes' (so entao a IA/pareamento sao chamados)."""
+    at.button(key="btn_generate_suggestions").click()
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def test_suggestions_are_not_generated_on_initial_load():
+    at = _run()
+
+    assert at.session_state.get("pairing_result") is None
+    assert not [box for box in at.text_input if box.key and box.key.startswith("risco_")]
+    info_texts = [info.value for info in at.info]
+    assert any("Gerar sugestões" in text for text in info_texts)
+
+
 def test_default_language_is_portuguese():
     at = _run()
 
@@ -47,8 +64,10 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
     _box(at, "ctx_criticidade").select("alta")
     _box(at, "ctx_modalidade").select("pregao_poc")
     at.number_input(key="ctx_prazo").set_value(24)
+    at.button(key="btn_generate_suggestions").click()
     at.run()
 
+    assert not at.exception, at.exception
     first_prob = sorted(_prob_boxes(at))[0]
     _box(at, first_prob).select(5)
     at.run()
@@ -81,7 +100,7 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
 
 
 def test_library_texts_follow_language_until_edited():
-    at = _run()
+    at = _generate(_run())
     risk_inputs = sorted(box.key for box in at.text_input if box.key and box.key.startswith("risco_"))
     edited_key, untouched_key = risk_inputs[0], risk_inputs[1]
     at.text_input(key=edited_key).input("Texto revisado pelo usuário")
@@ -103,7 +122,7 @@ def test_library_texts_follow_language_until_edited():
 
 
 def test_blind_suggestions_use_neutral_slot_ids_not_library_ids():
-    at = _run()
+    at = _generate(_run())
 
     pairing_result = at.session_state["pairing_result"]
     assert pairing_result.pairs

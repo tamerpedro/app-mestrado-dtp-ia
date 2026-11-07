@@ -401,20 +401,6 @@ def render_section_label(label: str) -> None:
 apply_dataprev_theme()
 
 
-def context_state_key(context: ContractContext) -> str:
-    return "|".join(
-        [
-            context.objeto,
-            context.tipo_contratacao,
-            str(context.valor_estimado),
-            context.criticidade,
-            context.prazo,
-            context.modalidade,
-            context.contexto,
-        ]
-    )
-
-
 def _clear_blind_widget_state() -> None:
     """Limpa os widgets de S01..S99 para que uma nova rodada de pares (apos
     mudar o contexto) nao herde textos editados de uma rodada anterior."""
@@ -423,17 +409,17 @@ def _clear_blind_widget_state() -> None:
             del st.session_state[state_key]
 
 
-def ensure_pairing_result(context: ContractContext, risks: list, provider, lang: str):
-    """Monta (e cacheia por contexto) os pares biblioteca+IA por categoria.
+def maybe_generate_pairing(context: ContractContext, risks: list, provider, lang: str, generate_clicked: bool):
+    """So monta os pares biblioteca+IA (e chama a IA) quando o usuario clica
+    em "Gerar sugestoes" - nunca so por abrir a tela ou editar um campo.
 
-    So chama a IA de novo quando o contexto muda (nao o idioma: o texto da
-    biblioteca se adapta ao idioma na propria renderizacao, via
-    ``risks_by_id``; o texto gerado pela IA fica congelado no idioma em que
-    foi gerado). Evita gerar (e sortear a ordem) a cada interacao do
-    Streamlit, e evita perder edicoes do usuario so por trocar o idioma.
+    O resultado fica em sessao ate o proximo clique (preserva selecoes e
+    edicoes do usuario entre reruns do Streamlit, inclusive ao trocar o
+    idioma: o texto da biblioteca se adapta via ``risks_by_id`` na propria
+    renderizacao; o texto gerado pela IA fica congelado no idioma em que
+    foi gerado).
     """
-    key = context_state_key(context)
-    if st.session_state.get("pairing_context_key") != key:
+    if generate_clicked:
         _clear_blind_widget_state()
         failures: list[dict] = []
         result = build_category_pairs(
@@ -444,10 +430,9 @@ def ensure_pairing_result(context: ContractContext, risks: list, provider, lang:
             lang=lang,
             on_ai_failure=lambda categoria, erro: failures.append({"categoria": categoria, "erro": erro}),
         )
-        st.session_state.pairing_context_key = key
         st.session_state.pairing_result = result
         st.session_state.pairing_failures = failures
-    return st.session_state.pairing_result, st.session_state.pairing_failures
+    return st.session_state.get("pairing_result"), st.session_state.get("pairing_failures", [])
 
 
 def row_text_blob(row: MatrixRow) -> str:
@@ -523,7 +508,8 @@ def build_context() -> ContractContext:
             help=tr("help.context"),
             key="ctx_contexto",
         )
-    return ContractContext(
+        generate_clicked = st.button(tr("action.generate"), type="primary", key="btn_generate_suggestions")
+    context = ContractContext(
         objeto=objeto,
         tipo_contratacao=tipo,
         valor_estimado=valor,
@@ -533,6 +519,7 @@ def build_context() -> ContractContext:
         modalidade=modalidade,
         contexto=contexto,
     )
+    return context, generate_clicked
 
 
 FINAL_MATRIX_COLUMNS = {
@@ -941,7 +928,7 @@ def render_blind_pair(
             }
 
 
-context = build_context()
+context, generate_clicked = build_context()
 try:
     risks = load_risks(DATA_PATH)
 except ValueError as exc:
@@ -957,14 +944,15 @@ except AIProviderError as exc:
     provider = FakeProvider(fail=True)
     ai_config_error = str(exc)
 
-pairing_result, pairing_failures = ensure_pairing_result(context, risks, provider, LANG)
-sem_par_count = sum(1 for pair in pairing_result.pairs if pair.sem_par)
+pairing_result, pairing_failures = maybe_generate_pairing(context, risks, provider, LANG, generate_clicked)
+pairs = pairing_result.pairs if pairing_result is not None else []
+sem_par_count = sum(1 for pair in pairs if pair.sem_par)
 
-render_app_header(context, len(pairing_result.pairs), sem_par_count)
+render_app_header(context, len(pairs), sem_par_count)
 
 if ai_config_error:
     st.warning(tr("ai.unavailable", detail=ai_config_error))
-elif pairing_failures:
+elif pairing_result is not None and pairing_failures:
     first_detail = pairing_failures[0]["erro"]
     st.warning(tr("ai.partial_failure", count=len(pairing_failures), detail=first_detail))
 
@@ -974,17 +962,20 @@ pairing_decisions: dict[str, dict] = {}
 
 with tab1:
     render_panel_title(tr("panel.suggested"))
-    total_suggestions = sum(len(pair.suggestions) for pair in pairing_result.pairs)
-    col1, col2, col3 = st.columns(3)
-    col1.metric(tr("metric.pairs_total"), total_suggestions)
-    col2.metric(tr("metric.categories"), len(pairing_result.pairs))
-    col3.metric(tr("metric.sem_par"), sem_par_count)
-
-    if not pairing_result.pairs:
-        st.info(tr("empty.suggested"))
+    if pairing_result is None:
+        st.info(tr("empty.not_generated"))
     else:
-        for par_index, pair in enumerate(pairing_result.pairs, start=1):
-            render_blind_pair(pair, par_index, pairing_decisions, risks_by_id)
+        total_suggestions = sum(len(pair.suggestions) for pair in pairs)
+        col1, col2, col3 = st.columns(3)
+        col1.metric(tr("metric.pairs_total"), total_suggestions)
+        col2.metric(tr("metric.categories"), len(pairs))
+        col3.metric(tr("metric.sem_par"), sem_par_count)
+
+        if not pairs:
+            st.info(tr("empty.suggested"))
+        else:
+            for par_index, pair in enumerate(pairs, start=1):
+                render_blind_pair(pair, par_index, pairing_decisions, risks_by_id)
 
 with tab2:
     render_panel_title(tr("panel.review"))
@@ -994,9 +985,7 @@ with tab2:
 with tab3:
     render_panel_title(tr("panel.final"))
 
-    slot_origin = {
-        suggestion.slot_id: suggestion.origin for pair in pairing_result.pairs for suggestion in pair.suggestions
-    }
+    slot_origin = {suggestion.slot_id: suggestion.origin for pair in pairs for suggestion in pair.suggestions}
     all_rows_for_export = [decision["row"] for decision in pairing_decisions.values()] + edited_manual_rows
     selected = selected_rows(all_rows_for_export)
 
@@ -1039,7 +1028,7 @@ with tab3:
             any(pairing_decisions.get(s.slot_id, {}).get("incluido") and s.origin == ORIGIN_LIBRARY for s in pair.suggestions),
             any(pairing_decisions.get(s.slot_id, {}).get("incluido") and s.origin == ORIGIN_AI for s in pair.suggestions),
         )
-        for pair in pairing_result.pairs
+        for pair in pairs
     )
     outcome_table = [
         {tr("outcome.column_label"): tr(f"outcome.{code}"), tr("outcome.count_label"): outcome_counts.get(code, 0)}
@@ -1075,14 +1064,14 @@ with tab3:
             modelo_ia=ai_config.model,
             versao_prompt=PROMPT_VERSION,
             hash_biblioteca=library_hash(DATA_PATH),
-            semente=pairing_result.seed,
+            semente=pairing_result.seed if pairing_result is not None else 0,
         )
         # Se a IA nao estava configurada, as falhas por categoria sao todas a
         # mesma causa raiz: so a entrada global entra no log.
         log.falhas_ia = [{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(pairing_failures)
 
         library_target = CANDIDATES_PATH if is_modo_avaliacao() else DATA_PATH
-        for par_index, pair in enumerate(pairing_result.pairs, start=1):
+        for par_index, pair in enumerate(pairs, start=1):
             library_chosen = False
             ai_chosen = False
             for suggestion in pair.suggestions:
@@ -1100,6 +1089,8 @@ with tab3:
                         editado=decision["editado"],
                         proporcao_edicao=decision["proporcao_edicao"],
                         motivo_descarte=decision["motivo_descarte"],
+                        pontuacao=suggestion.pontuacao,
+                        abaixo_corte=suggestion.abaixo_corte,
                     )
                 )
                 if decision["incluido"]:
