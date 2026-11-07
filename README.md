@@ -39,17 +39,71 @@ Estado atual: interface e biblioteca de riscos bilíngues; a justificativa das s
 ## Estrutura
 
 ```text
-app.py                  Interface Streamlit
-data/riscos_base.csv    Biblioteca inicial de riscos
-locales/pt.json         Textos da interface em português
-locales/en.json         Textos da interface em inglês
-src/domain.py           Códigos de domínio e rótulos por idioma
-src/i18n.py             Função t() de tradução
-src/                    Regras, modelos e exportadores
-tests/                  Testes da lógica central e da troca de idioma
+app.py                          Interface Streamlit
+data/riscos_base.csv            Biblioteca inicial de riscos
+data/candidatos_ia.csv          Riscos de IA escolhidos (gerado em runtime; fora do versionamento)
+data/avaliacao/                 Log por processo da avaliação cega (gerado em runtime; fora do versionamento)
+locales/pt.json                 Textos da interface em português
+locales/en.json                 Textos da interface em inglês
+prompts/gerar_risco_v1.txt      Prompt versionado usado para gerar o risco de IA
+scripts/consolidar_avaliacao.py Consolidação dos logs de avaliação (CSVs + teste de McNemar)
+src/domain.py                   Códigos de domínio e rótulos por idioma
+src/i18n.py                     Função t() de tradução
+src/ai_provider.py              Provedor de IA (Anthropic / compatível OpenAI / fake para testes)
+src/eval_mode.py                Flag MODO_AVALIACAO e hash da biblioteca
+src/risk_generator.py           Prompt e validação do risco gerado por IA
+src/pairing.py                  Pareamento 1 biblioteca + 1 IA por categoria (avaliação cega)
+src/eval_log.py                 Schema e gravação do log de avaliação por processo
+src/                            Regras, modelos e exportadores
+tests/                          Testes da lógica central, da troca de idioma e da avaliação cega
 ```
 
 Para adicionar ou alterar um texto da interface, edite a mesma chave em `locales/pt.json` e `locales/en.json`; o teste `tests/test_i18n.py` falha se as chaves divergirem.
+
+## Avaliação cega com IA
+
+Segundo ciclo de avaliação do estudo (Design Science Research): em cada categoria, a interface mostra 1 sugestão da biblioteca e 1 gerada por IA lado a lado, sem indicar qual é qual (IDs neutros `S01`, `S02`...). Ao gerar a matriz final, o app revela a origem de cada risco escolhido e coleta uma avaliação curta.
+
+### Configurar a chave de IA
+
+Não há LLM local no ambiente; defina o provedor e a chave por variável de ambiente ou em `.streamlit/secrets.toml` (nunca comitado; já está no `.gitignore`):
+
+```toml
+# .streamlit/secrets.toml
+AI_PROVIDER = "anthropic"       # ou "openai"
+AI_MODEL = "claude-sonnet-4-5-20250929"
+ANTHROPIC_API_KEY = "sk-ant-..."
+# Para um provedor compativel com OpenAI:
+# OPENAI_API_KEY = "sk-..."
+# OPENAI_BASE_URL = "https://..."
+```
+
+Ou por variável de ambiente (PowerShell):
+
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+streamlit run app.py
+```
+
+Sem chave configurada (ou se a chamada falhar), o app mostra um aviso e segue a avaliação só com a biblioteca — nenhuma sugestão de IA é exibida nas categorias afetadas, e a falha fica registrada no log. O prompt usado fica versionado em `prompts/gerar_risco_v1.txt`; a versão (`v1`) é gravada em cada log.
+
+### Rodar a avaliação
+
+```powershell
+streamlit run app.py
+```
+
+Na barra lateral, informe um **código do processo** (texto livre, sem dados pessoais) antes de avaliar. Na aba "Sugestões", cada par aparece com IDs neutros e as duas sugestões começam desmarcadas; ao descartar uma, é possível informar um motivo (opcional). Na aba "Exportação", a origem de cada risco escolhido é revelada, com as contagens por origem e desfecho, e ficam disponíveis as 3 perguntas finais (escala 1-5) e um comentário opcional; "Salvar avaliação" grava o log do processo em `data/avaliacao/<código>_<timestamp>.json`.
+
+Durante a avaliação (`MODO_AVALIACAO`, ligado por padrão nesta branch), nada é gravado em `data/riscos_base.csv`: riscos de IA escolhidos vão para `data/candidatos_ia.csv`, e o botão de salvar manualmente na biblioteca (revisão humana) fica desativado. Para desligar (voltando a gravar direto na biblioteca), defina `MODO_AVALIACAO=false` por variável de ambiente ou em `secrets.toml`.
+
+### Consolidar os resultados
+
+```powershell
+python scripts/consolidar_avaliacao.py
+```
+
+Lê todos os JSON em `data/avaliacao/`, gera `resumo_processos.csv` (uma linha por processo) e `resumo_pares.csv` (uma linha por par biblioteca+IA) na raiz do projeto, e imprime no terminal os totais, as taxas por desfecho (`so_biblioteca`, `so_ia`, `ambos`, `nenhum`, `sem_par`) e o teste de McNemar exato entre `so_biblioteca` e `so_ia`. Use `--log-dir` e `--out-dir` para outros caminhos.
 
 ## Decisao de Projeto
 
