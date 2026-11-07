@@ -22,6 +22,27 @@ def _box(at: AppTest, key: str):
     return next(box for box in at.selectbox if box.key and box.key.split("@")[0] == key)
 
 
+def _inclusion_checkboxes(at: AppTest):
+    return [checkbox for checkbox in at.checkbox if checkbox.key and checkbox.key.startswith("incl_")]
+
+
+def _generate(at: AppTest) -> AppTest:
+    """Clica em 'Gerar sugestoes' (so entao a IA/pareamento sao chamados)."""
+    at.button(key="btn_generate_suggestions").click()
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def test_suggestions_are_not_generated_on_initial_load():
+    at = _run()
+
+    assert at.session_state.get("pairing_result") is None
+    assert not [box for box in at.text_input if box.key and box.key.startswith("risco_")]
+    info_texts = [info.value for info in at.info]
+    assert any("Gerar sugestões" in text for text in info_texts)
+
+
 def test_default_language_is_portuguese():
     at = _run()
 
@@ -37,21 +58,23 @@ def test_query_param_opens_in_english():
     assert [tab.label for tab in at.tabs] == ["Suggestions", "Human review", "Export"]
 
 
-def test_switching_language_keeps_inputs_and_review_edits():
+def test_switching_language_keeps_inputs_and_blind_review_edits():
     at = _run()
     at.text_area(key="ctx_objeto").input("Contratação de licenças de software com implantação")
     _box(at, "ctx_criticidade").select("alta")
     _box(at, "ctx_modalidade").select("pregao_poc")
     at.number_input(key="ctx_prazo").set_value(24)
+    at.button(key="btn_generate_suggestions").click()
     at.run()
 
+    assert not at.exception, at.exception
     first_prob = sorted(_prob_boxes(at))[0]
     _box(at, first_prob).select(5)
     at.run()
-    at.button(key="remove_suggested_button").click()
+    _inclusion_checkboxes(at)[0].set_value(True)
     at.run()
     before = _prob_boxes(at)
-    suggested_before = at.metric[0].value
+    pairs_total_before = at.metric[0].value
 
     at.radio(key="lang").set_value("en")
     at.run()
@@ -64,7 +87,7 @@ def test_switching_language_keeps_inputs_and_review_edits():
     assert _box(at, "ctx_modalidade").value == "pregao_poc"
     assert at.number_input(key="ctx_prazo").value == 24
     assert _prob_boxes(at) == before
-    assert at.metric[0].value == suggested_before
+    assert at.metric[0].value == pairs_total_before
     assert _box(at, "ctx_criticidade").format_func("alta") == "High"
 
     at.radio(key="lang").set_value("pt")
@@ -73,11 +96,11 @@ def test_switching_language_keeps_inputs_and_review_edits():
     assert _box(at, "ctx_criticidade").value == "alta"
     assert _box(at, "ctx_criticidade").format_func("alta") == "Alta"
     assert _prob_boxes(at) == before
-    assert at.metric[0].value == suggested_before
+    assert at.metric[0].value == pairs_total_before
 
 
 def test_library_texts_follow_language_until_edited():
-    at = _run()
+    at = _generate(_run())
     risk_inputs = sorted(box.key for box in at.text_input if box.key and box.key.startswith("risco_"))
     edited_key, untouched_key = risk_inputs[0], risk_inputs[1]
     at.text_input(key=edited_key).input("Texto revisado pelo usuário")
@@ -90,11 +113,26 @@ def test_library_texts_follow_language_until_edited():
     assert not at.exception, at.exception
     assert at.text_input(key=edited_key).value == "Texto revisado pelo usuário"
     assert at.text_input(key=untouched_key).value != untouched_pt
-    table = at.dataframe[0].value
-    assert "Risk" in table.columns
 
     at.radio(key="lang").set_value("pt")
     at.run()
 
     assert at.text_input(key=untouched_key).value == untouched_pt
     assert at.text_input(key=edited_key).value == "Texto revisado pelo usuário"
+
+
+def test_blind_suggestions_use_neutral_slot_ids_not_library_ids():
+    at = _generate(_run())
+
+    pairing_result = at.session_state["pairing_result"]
+    assert pairing_result.pairs
+    for pair in pairing_result.pairs:
+        for suggestion in pair.suggestions:
+            assert suggestion.slot_id.startswith("S")
+            if suggestion.origin == "ia":
+                assert suggestion.row.id == ""
+            assert not suggestion.row.justificativa
+
+    risco_keys = [box.key for box in at.text_input if box.key and box.key.startswith("risco_")]
+    assert risco_keys
+    assert all(key.split("@")[0].split("risco_", 1)[1].startswith("S") for key in risco_keys)
