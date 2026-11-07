@@ -36,25 +36,7 @@ def test_dynamic_translation_keys_resolve_for_every_known_code():
     pegas pelo grep de ``test_every_key_used_in_code_exists`` (so casa
     ``tr("...")`` literal). Garante aqui que cada codigo conhecido usado
     dessa forma em app.py tem uma chave correspondente nos dois idiomas."""
-    from src.eval_log import (
-        DISCARD_REASONS,
-        OUTCOME_AI_ONLY,
-        OUTCOME_BOTH,
-        OUTCOME_LIBRARY_ONLY,
-        OUTCOME_NONE,
-        OUTCOME_SEM_PAR,
-    )
-    from src.pairing import ORIGIN_AI, ORIGIN_LIBRARY
-
-    dynamic_keys = (
-        [f"item.{slot}" for slot in ["consequence", "preventive", "contingency"]]
-        + [f"discard.reason.{code}" for code in DISCARD_REASONS]
-        + [f"reveal.{origin}" for origin in [ORIGIN_LIBRARY, ORIGIN_AI, "manual"]]
-        + [
-            f"outcome.{code}"
-            for code in [OUTCOME_LIBRARY_ONLY, OUTCOME_AI_ONLY, OUTCOME_BOTH, OUTCOME_NONE, OUTCOME_SEM_PAR]
-        ]
-    )
+    dynamic_keys = [f"item.{slot}" for slot in ["consequence", "preventive", "contingency"]]
 
     pt, en = _catalog("pt"), _catalog("en")
     for key in dynamic_keys:

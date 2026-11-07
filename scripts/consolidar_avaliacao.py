@@ -26,13 +26,15 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.eval_log import (  # noqa: E402
-    OUTCOME_AI_ONLY,
-    OUTCOME_BOTH,
-    OUTCOME_LIBRARY_ONLY,
-    OUTCOME_NONE,
-    OUTCOME_SEM_PAR,
-)
+# Desfechos do schema antigo (pareamento 1 biblioteca + 1 IA por categoria).
+# src.eval_log nao tem mais esses nomes (o pareamento foi substituido pela
+# lista cega catalogo+IA, ver src/catalog_mix.py); este script sera reescrito
+# para o novo schema numa proxima etapa. Ate la, so processa logs antigos.
+OUTCOME_LIBRARY_ONLY = "so_biblioteca"
+OUTCOME_AI_ONLY = "so_ia"
+OUTCOME_BOTH = "ambos"
+OUTCOME_NONE = "nenhum"
+OUTCOME_SEM_PAR = "sem_par"
 
 DEFAULT_LOG_DIR = ROOT / "data" / "avaliacao"
 OUTCOME_ORDER = [OUTCOME_LIBRARY_ONLY, OUTCOME_AI_ONLY, OUTCOME_BOTH, OUTCOME_NONE, OUTCOME_SEM_PAR]

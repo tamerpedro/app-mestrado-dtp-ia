@@ -1,10 +1,12 @@
-"""Schema e gravacao do log de avaliacao cega, um JSON por processo.
+"""Schema e gravacao do log de avaliacao, um JSON por processo.
 
 Grava em ``data/avaliacao/`` (fora do controle de versao): metadados do
 processo (idioma, provedor/modelo de IA, versao do prompt, hash da
-biblioteca, semente do sorteio), o detalhe de cada sugestao (par, categoria,
-origem, posicao, se foi escolhida/editada e a proporcao de edicao via
-``difflib``), o desfecho de cada par e as respostas da tela final.
+biblioteca, semente do sorteio) e o detalhe de cada item mostrado
+(categoria, origem, posicao, se foi escolhido/editado e a proporcao de
+edicao via ``difflib``). O schema completo (totais por origem/categoria,
+experiencia do participante etc.) e montado numa proxima etapa; por
+enquanto so o essencial para nao perder o formato ja pensado.
 """
 
 from __future__ import annotations
@@ -18,38 +20,18 @@ from pathlib import Path
 
 DEFAULT_LOG_DIR = Path("data/avaliacao")
 
-OUTCOME_LIBRARY_ONLY = "so_biblioteca"
-OUTCOME_AI_ONLY = "so_ia"
-OUTCOME_BOTH = "ambos"
-OUTCOME_NONE = "nenhum"
-OUTCOME_SEM_PAR = "sem_par"
-
-DISCARD_REASONS = ["duplicado", "nao_se_aplica", "generico_demais", "mal_formulado", "outro"]
-
 _SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 @dataclass
 class SuggestionLogEntry:
-    par: int
     categoria: str
-    origem: str  # "biblioteca" | "ia" - nunca exibido na interface
-    posicao: int  # posicao sorteada dentro do par (1, 2, ...)
+    origem: str  # "catalogo" | "ia" - nunca exibido na interface
+    posicao: int  # posicao sorteada dentro da categoria (1, 2, ...)
     slot_id: str
     escolhido: bool
     editado: bool = False
     proporcao_edicao: float = 0.0
-    motivo_descarte: str | None = None
-    # So para origem == "biblioteca" (None para "ia"); nunca exibido na interface.
-    pontuacao: int | None = None
-    abaixo_corte: bool | None = None
-
-
-@dataclass
-class PairOutcome:
-    par: int
-    categoria: str
-    desfecho: str  # OUTCOME_*
 
 
 @dataclass
@@ -63,7 +45,6 @@ class EvaluationLog:
     semente: int
     data_hora: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     sugestoes: list[SuggestionLogEntry] = field(default_factory=list)
-    pares: list[PairOutcome] = field(default_factory=list)
     quantidade_riscos_manuais: int = 0
     falhas_ia: list[dict] = field(default_factory=list)
     respostas_finais: dict = field(default_factory=dict)
@@ -80,19 +61,6 @@ def edit_ratio(original: str, editado: str) -> float:
         return 0.0
     matcher = difflib.SequenceMatcher(a=original, b=editado)
     return round(1.0 - matcher.ratio(), 4)
-
-
-def outcome_for_pair(sem_par: bool, library_chosen: bool, ai_chosen: bool) -> str:
-    """Desfecho do par: sem_par, so_biblioteca, so_ia, ambos ou nenhum."""
-    if sem_par:
-        return OUTCOME_SEM_PAR
-    if library_chosen and ai_chosen:
-        return OUTCOME_BOTH
-    if library_chosen:
-        return OUTCOME_LIBRARY_ONLY
-    if ai_chosen:
-        return OUTCOME_AI_ONLY
-    return OUTCOME_NONE
 
 
 def _safe_filename(codigo_processo: str) -> str:
