@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import re
-from collections import Counter, defaultdict
+from collections import defaultdict
 from html import escape
 import io
 from pathlib import Path
@@ -11,6 +11,13 @@ import streamlit as st
 from openpyxl import Workbook
 
 from src.ai_provider import AIProviderError, FakeProvider, build_provider, load_ai_config
+from src.case_store import get_or_generate_case_ai_risks, list_case_files, load_case
+from src.catalog_mix import (
+    ORIGIN_CATALOG,
+    CategoryItems,
+    build_category_mix,
+    generate_ai_risks_for_all_categories,
+)
 from src.docx_exporter import to_docx
 from src.domain import (
     ACTION_STATUSES,
@@ -30,36 +37,19 @@ from src.domain import (
     risk_level_label,
     strategy_label,
 )
-from src.eval_log import (
-    DISCARD_REASONS,
-    EvaluationLog,
-    PairOutcome,
-    SuggestionLogEntry,
-    edit_ratio,
-    outcome_for_pair,
-    save_evaluation_log,
-)
-from src.eval_mode import is_modo_avaliacao, library_hash
+from src.eval_mode import is_modo_avaliacao
 from src.i18n import DEFAULT_LANGUAGE, LANGUAGES, normalize_language, t
 from src.exporters import EXPORT_FIELDS, row_to_export_dict, selected_rows, to_csv, to_latex
 from src.models import ActionItem, ContractContext, MatrixRow
-from src.pairing import ORIGIN_AI, ORIGIN_LIBRARY, CategoryPair, build_category_pairs
-from src.risk_generator import PROMPT_VERSION
 from src.risk_library import load_risks, save_matrix_row_to_library
 from src.scoring import IMPACT_OPTIONS, PROBABILITY_OPTIONS, canonical_scale, risk_level
 
 
 DATA_PATH = Path("data/riscos_base.csv")
-CANDIDATES_PATH = Path("data/candidatos_ia.csv")
-LOG_DIR = Path("data/avaliacao")
 LOGO_PATH = Path("assets/dataprev-logo.png")
-LIKERT_SCALE = [1, 2, 3, 4, 5]
+NO_CASE = "__nenhum__"
 
-# Mesmo corte padrao de src.suggestions.suggest_risks: nao altera a logica de pontuacao,
-# so reaproveita o mesmo limiar para escolher o risco de biblioteca de cada par.
-DEFAULT_MINIMUM_SCORE = 2
-
-_SLOT_ID_RE = re.compile(r"S\d{2}")
+_SLOT_ID_RE = re.compile(r"S\d{2,}")
 
 
 def resolve_language() -> str:
@@ -365,7 +355,7 @@ def image_to_data_uri(path: Path) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def render_app_header(context: ContractContext, total_pairs: int, sem_par_count: int) -> None:
+def render_app_header(context: ContractContext, total_items: int, total_categories: int) -> None:
     logo_uri = image_to_data_uri(LOGO_PATH)
     logo_html = (
         f'<div class="dtp-logo-wrap"><img src="{logo_uri}" alt="{escape(tr("app.logo_alt"))}"></div>'
@@ -386,7 +376,7 @@ def render_app_header(context: ContractContext, total_pairs: int, sem_par_count:
             <div class="dtp-status-grid">
                 <div class="dtp-status"><span>{escape(tr("header.type"))}</span><strong>{escape(contract_type_label(context.tipo_contratacao, LANG))}</strong></div>
                 <div class="dtp-status"><span>{escape(tr("header.criticality"))}</span><strong>{escape(criticality_label(context.criticidade, LANG))}</strong></div>
-                <div class="dtp-status"><span>{escape(tr("header.pairs"))}</span><strong>{escape(tr("header.pairs_value", total=total_pairs, sem_par=sem_par_count))}</strong></div>
+                <div class="dtp-status"><span>{escape(tr("header.items"))}</span><strong>{escape(tr("header.items_value", total=total_items, categories=total_categories))}</strong></div>
             </div>
         </section>
         """,
@@ -409,34 +399,40 @@ def _clear_blind_widget_state() -> None:
             del st.session_state[state_key]
 
 
-def maybe_generate_pairing(context: ContractContext, risks: list, provider, lang: str, generate_clicked: bool):
-    """So monta os pares biblioteca+IA (e chama a IA) quando o usuario clica
-    em "Gerar sugestoes" - nunca so por abrir a tela ou editar um campo.
+def maybe_generate_mix(
+    context: ContractContext,
+    risks: list,
+    provider,
+    lang: str,
+    generate_clicked: bool,
+    selected_case_path: Path | None,
+):
+    """So monta a lista cega catalogo+IA (e chama a IA, ou reusa o cache do
+    caso) quando o usuario clica em "Gerar sugestoes" - nunca so por abrir a
+    tela ou editar um campo.
 
     O resultado fica em sessao ate o proximo clique (preserva selecoes e
     edicoes do usuario entre reruns do Streamlit, inclusive ao trocar o
-    idioma: o texto da biblioteca se adapta via ``risks_by_id`` na propria
+    idioma: o texto do catalogo se adapta via ``risks_by_id`` na propria
     renderizacao; o texto gerado pela IA fica congelado no idioma em que
     foi gerado).
     """
     if generate_clicked:
         _clear_blind_widget_state()
         failures: list[dict] = []
-        result = build_category_pairs(
-            risks,
-            context,
-            provider,
-            minimum_score=DEFAULT_MINIMUM_SCORE,
-            lang=lang,
-            on_ai_failure=lambda categoria, erro: failures.append({"categoria": categoria, "erro": erro}),
-        )
-        st.session_state.pairing_result = result
-        st.session_state.pairing_failures = failures
-    return st.session_state.get("pairing_result"), st.session_state.get("pairing_failures", [])
-
-
-def row_text_blob(row: MatrixRow) -> str:
-    return "||".join([row.risco, row.causa, row.consequencia, row.acao_preventiva, row.acao_contingencia])
+        on_failure = lambda categoria, erro: failures.append({"categoria": categoria, "erro": erro})  # noqa: E731
+        if selected_case_path is not None:
+            ai_risks = get_or_generate_case_ai_risks(
+                selected_case_path, lang, risks, context, provider, on_ai_failure=on_failure
+            )
+        else:
+            ai_risks = generate_ai_risks_for_all_categories(
+                risks, context, provider, lang=lang, on_ai_failure=on_failure
+            )
+        result = build_category_mix(risks, context, ai_risks, lang=lang)
+        st.session_state.mix_result = result
+        st.session_state.mix_failures = failures
+    return st.session_state.get("mix_result"), st.session_state.get("mix_failures", [])
 
 
 def render_language_selector() -> None:
@@ -450,7 +446,58 @@ def render_language_selector() -> None:
     st.query_params["lang"] = st.session_state.lang
 
 
-def build_context() -> ContractContext:
+def _apply_case_to_context_fields(context: ContractContext) -> None:
+    """Preenche os campos da contratacao com os de um caso salvo.
+
+    So roda quando o caso selecionado muda (nao a cada rerun), para o
+    usuario poder editar os campos depois sem que voltem ao valor do caso.
+    Os campos com ``select()`` tem sua chave de widget limpa para forcar a
+    resincronizacao com o novo valor nesta rerun.
+    """
+    st.session_state.ctx_objeto = context.objeto
+    st.session_state.ctx_valor = context.valor_estimado
+    st.session_state.ctx_contexto = context.contexto
+    for key, value in [
+        ("ctx_tipo", context.tipo_contratacao),
+        ("ctx_criticidade", context.criticidade),
+        ("ctx_modalidade", context.modalidade),
+    ]:
+        st.session_state[key] = value
+        st.session_state.pop(f"{key}@{LANG}", None)
+    try:
+        st.session_state.ctx_prazo = int(str(context.prazo).split()[0])
+    except (ValueError, IndexError):
+        pass
+
+
+def render_case_selector() -> Path | None:
+    """Seletor "Caso" na barra lateral; aplica o contexto do caso escolhido
+    uma unica vez (na troca), para o usuario poder editar depois."""
+    case_files = list_case_files()
+    options = [NO_CASE, *(str(path) for path in case_files)]
+    labels = {NO_CASE: tr("case.none")}
+    for path in case_files:
+        nome, _ = load_case(path)
+        labels[str(path)] = nome
+
+    selected = select(
+        tr("case.label"),
+        options,
+        format_func=lambda value: labels.get(value, value),
+        key="selected_case",
+    )
+
+    if selected != NO_CASE and st.session_state.get("_applied_case") != selected:
+        _, case_context = load_case(Path(selected))
+        _apply_case_to_context_fields(case_context)
+        st.session_state._applied_case = selected
+    elif selected == NO_CASE:
+        st.session_state._applied_case = None
+
+    return Path(selected) if selected != NO_CASE else None
+
+
+def build_context() -> tuple[ContractContext, bool, Path | None]:
     with st.sidebar:
         st.markdown(
             f"""
@@ -463,6 +510,7 @@ def build_context() -> ContractContext:
         )
         render_language_selector()
         st.text_input(tr("process.code"), help=tr("process.help"), key="codigo_processo")
+        selected_case_path = render_case_selector()
         st.header(tr("sidebar.contract"))
         objeto = st.text_area(tr("field.object"), value=tr("field.object_default"), key="ctx_objeto")
         tipo = select(
@@ -519,7 +567,7 @@ def build_context() -> ContractContext:
         modalidade=modalidade,
         contexto=contexto,
     )
-    return context, generate_clicked
+    return context, generate_clicked, selected_case_path
 
 
 FINAL_MATRIX_COLUMNS = {
@@ -813,21 +861,26 @@ def grouped_row_indexes(rows: list[MatrixRow]) -> list[tuple[str, list[tuple[int
     return sorted(grouped.items(), key=sort_key)
 
 
-def render_blind_pair(
-    pair: CategoryPair, par_index: int, decisions: dict[str, dict], risks_by_id: dict[str, object]
+def render_blind_category(
+    category: CategoryItems, decisions: dict[str, dict], risks_by_id: dict[str, object], ai_failed: bool
 ) -> None:
-    """Renderiza um par (ou uma sugestao isolada, se ``sem_par``) e preenche
-    ``decisions[slot_id]`` com a decisao do usuario para essa sugestao."""
-    sem_par_suffix = tr("pair.sem_par_suffix")
-    suffix = f" — {sem_par_suffix}" if pair.sem_par else ""
-    render_section_label(f"{category_label(pair.categoria, LANG)}{suffix}")
+    """Renderiza a lista cega (catalogo+IA misturados) de uma categoria e
+    preenche ``decisions[slot_id]`` com a decisao do usuario para cada item.
 
-    for posicao, suggestion in enumerate(pair.suggestions, start=1):
-        slot_key = suggestion.slot_id
-        row = suggestion.row
-        # Sugestao de biblioteca: o texto acompanha o idioma atual (consulta o
-        # RiskItem original); sugestao de IA fica congelada no idioma gerado.
-        source_risk = risks_by_id.get(row.id) if suggestion.origin == ORIGIN_LIBRARY else None
+    O ID neutro, o titulo e a caixa "incluir" ficam visiveis sem precisar
+    expandir; os detalhes (causa, consequencia, P×I, acoes, edicao) ficam
+    no expander.
+    """
+    render_section_label(category_label(category.categoria, LANG))
+    if ai_failed:
+        st.caption(tr("category.ai_partial_warning"))
+
+    for item in category.items:
+        slot_key = item.slot_id
+        row = item.row
+        # Item de catalogo: o texto acompanha o idioma atual (consulta o
+        # RiskItem original); item de IA fica congelado no idioma gerado.
+        source_risk = risks_by_id.get(row.id) if item.origin == ORIGIN_CATALOG else None
         if source_risk is not None:
             default_risco = source_risk.text("titulo", LANG)
             default_causa = source_risk.text("causa", LANG)
@@ -841,8 +894,15 @@ def render_blind_pair(
             default_preventivas = row.acoes_preventivas
             default_contingencias = row.acoes_contingencia
 
-        with st.expander(f"{slot_key} - {default_risco}", expanded=False):
-            incluido = st.checkbox(tr("review.include"), value=False, key=f"incl_{slot_key}")
+        col_check, col_title = st.columns([1, 11])
+        with col_check:
+            incluido = st.checkbox(
+                tr("review.include"), value=False, key=f"incl_{slot_key}", label_visibility="collapsed"
+            )
+        with col_title:
+            st.markdown(f"**{slot_key}** - {escape(default_risco)}")
+
+        with st.expander(tr("item.details"), expanded=False):
             col1, col2, col3 = st.columns(3)
             with col1:
                 probabilidade = select(
@@ -873,20 +933,10 @@ def render_blind_pair(
             render_section_label(tr("section.contingency"))
             contingencias = edit_action_items(slot_key, "contingency", default_contingencias)
 
-            motivo_descarte = None
-            if not incluido:
-                motivo_codigo = select(
-                    tr("discard.reason"),
-                    ["", *DISCARD_REASONS],
-                    format_func=lambda code: tr(f"discard.reason.{code}") if code else tr("discard.reason.none"),
-                    key=f"motivo_{slot_key}",
-                )
-                motivo_descarte = motivo_codigo or None
-
             edited_row = MatrixRow(
                 id=slot_key,
                 risco=risco,
-                categoria=pair.categoria,
+                categoria=category.categoria,
                 causa=causa,
                 consequencias=consequencias,
                 probabilidade=probabilidade,
@@ -898,37 +948,16 @@ def render_blind_pair(
                 selecionado=incluido,
                 tags=row.tags,
             )
-            # Linha de base no idioma atual (nao a de geracao): troca de idioma sozinha
-            # nao deve contar como edicao do usuario.
-            baseline_row = MatrixRow(
-                id=row.id,
-                risco=default_risco,
-                categoria=pair.categoria,
-                causa=default_causa,
-                consequencias=default_consequencias,
-                probabilidade=row.probabilidade,
-                impacto=row.impacto,
-                nivel=row.nivel,
-                estrategia=row.estrategia,
-                acoes_preventivas=default_preventivas,
-                acoes_contingencia=default_contingencias,
-                tags=row.tags,
-            )
-            ratio = edit_ratio(row_text_blob(baseline_row), row_text_blob(edited_row))
             decisions[slot_key] = {
                 "row": edited_row,
-                "origin": suggestion.origin,
-                "categoria": pair.categoria,
-                "par": par_index,
-                "posicao": posicao,
+                "origin": item.origin,
+                "categoria": category.categoria,
+                "posicao": item.posicao,
                 "incluido": incluido,
-                "editado": ratio > 0.0,
-                "proporcao_edicao": ratio,
-                "motivo_descarte": motivo_descarte,
             }
 
 
-context, generate_clicked = build_context()
+context, generate_clicked, selected_case_path = build_context()
 try:
     risks = load_risks(DATA_PATH)
 except ValueError as exc:
@@ -944,38 +973,35 @@ except AIProviderError as exc:
     provider = FakeProvider(fail=True)
     ai_config_error = str(exc)
 
-pairing_result, pairing_failures = maybe_generate_pairing(context, risks, provider, LANG, generate_clicked)
-pairs = pairing_result.pairs if pairing_result is not None else []
-sem_par_count = sum(1 for pair in pairs if pair.sem_par)
+mix_result, mix_failures = maybe_generate_mix(context, risks, provider, LANG, generate_clicked, selected_case_path)
+categories = mix_result.categories if mix_result is not None else []
+categories_with_ai_failure = {failure["categoria"] for failure in mix_failures}
 
-render_app_header(context, len(pairs), sem_par_count)
+render_app_header(context, sum(len(c.items) for c in categories), len(categories))
 
 if ai_config_error:
     st.warning(tr("ai.unavailable", detail=ai_config_error))
-elif pairing_result is not None and pairing_failures:
-    first_detail = pairing_failures[0]["erro"]
-    st.warning(tr("ai.partial_failure", count=len(pairing_failures), detail=first_detail))
 
 tab1, tab2, tab3 = st.tabs([tr("tab.suggestions"), tr("tab.review"), tr("tab.export")])
 
-pairing_decisions: dict[str, dict] = {}
+mix_decisions: dict[str, dict] = {}
 
 with tab1:
     render_panel_title(tr("panel.suggested"))
-    if pairing_result is None:
+    if mix_result is None:
         st.info(tr("empty.not_generated"))
     else:
-        total_suggestions = sum(len(pair.suggestions) for pair in pairs)
-        col1, col2, col3 = st.columns(3)
-        col1.metric(tr("metric.pairs_total"), total_suggestions)
-        col2.metric(tr("metric.categories"), len(pairs))
-        col3.metric(tr("metric.sem_par"), sem_par_count)
+        col1, col2 = st.columns(2)
+        col1.metric(tr("metric.items_total"), sum(len(c.items) for c in categories))
+        col2.metric(tr("metric.categories"), len(categories))
 
-        if not pairs:
+        if not categories:
             st.info(tr("empty.suggested"))
         else:
-            for par_index, pair in enumerate(pairs, start=1):
-                render_blind_pair(pair, par_index, pairing_decisions, risks_by_id)
+            for category in categories:
+                render_blind_category(
+                    category, mix_decisions, risks_by_id, category.categoria in categories_with_ai_failure
+                )
 
 with tab2:
     render_panel_title(tr("panel.review"))
@@ -985,58 +1011,10 @@ with tab2:
 with tab3:
     render_panel_title(tr("panel.final"))
 
-    slot_origin = {suggestion.slot_id: suggestion.origin for pair in pairs for suggestion in pair.suggestions}
-    all_rows_for_export = [decision["row"] for decision in pairing_decisions.values()] + edited_manual_rows
+    all_rows_for_export = [decision["row"] for decision in mix_decisions.values()] + edited_manual_rows
     selected = selected_rows(all_rows_for_export)
 
-    render_section_label(tr("reveal.title"))
-    reveal_table = []
-    for row in selected:
-        origin = slot_origin.get(row.id, "manual")
-        origin_key = origin if origin in (ORIGIN_LIBRARY, ORIGIN_AI) else "manual"
-        reveal_table.append(
-            {
-                tr("col.id"): row.id,
-                tr("reveal.origin_column"): tr(f"reveal.{origin_key}"),
-                tr("col.risk"): row.risco,
-                tr("col.category"): category_label(row.categoria, LANG),
-            }
-        )
-    if reveal_table:
-        st.dataframe(reveal_table, width="stretch", hide_index=True)
-    else:
-        st.info(tr("empty.list"))
-
-    library_count = sum(1 for row in selected if slot_origin.get(row.id) == ORIGIN_LIBRARY)
-    ai_count = sum(1 for row in selected if slot_origin.get(row.id) == ORIGIN_AI)
-    manual_count = sum(1 for row in selected if row.id not in slot_origin)
-    edited_count = sum(
-        1
-        for row in selected
-        if row.id in pairing_decisions and pairing_decisions[row.id]["editado"]
-    )
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric(tr("reveal.library"), library_count)
-    col2.metric(tr("reveal.ai"), ai_count)
-    col3.metric(tr("reveal.manual_metric"), manual_count)
-    col4.metric(tr("reveal.edited"), edited_count)
-
-    outcome_counts = Counter(
-        outcome_for_pair(
-            pair.sem_par,
-            any(pairing_decisions.get(s.slot_id, {}).get("incluido") and s.origin == ORIGIN_LIBRARY for s in pair.suggestions),
-            any(pairing_decisions.get(s.slot_id, {}).get("incluido") and s.origin == ORIGIN_AI for s in pair.suggestions),
-        )
-        for pair in pairs
-    )
-    outcome_table = [
-        {tr("outcome.column_label"): tr(f"outcome.{code}"), tr("outcome.count_label"): outcome_counts.get(code, 0)}
-        for code in ["so_biblioteca", "so_ia", "ambos", "nenhum", "sem_par"]
-        if outcome_counts.get(code, 0) > 0
-    ]
-    if outcome_table:
-        st.dataframe(outcome_table, width="stretch", hide_index=True)
+    st.caption(tr("export.final_pending"))
 
     col1, col2, col3 = st.columns(3)
     col1.metric(tr("metric.selected"), len(selected))
@@ -1045,77 +1023,6 @@ with tab3:
     st.dataframe(final_matrix_table(selected), width="stretch", hide_index=True)
     if LANG != DEFAULT_LANGUAGE:
         st.caption(tr("export.pt_only"))
-
-    render_section_label(tr("likert.header"))
-    utilidade = st.radio(tr("likert.usefulness"), LIKERT_SCALE, horizontal=True, key="likert_utilidade")
-    confianca = st.radio(tr("likert.confidence"), LIKERT_SCALE, horizontal=True, key="likert_confianca")
-    esforco = st.radio(tr("likert.effort"), LIKERT_SCALE, horizontal=True, key="likert_esforco")
-    comentario = st.text_area(tr("likert.comment"), key="likert_comentario")
-
-    codigo_processo = (st.session_state.get("codigo_processo") or "").strip()
-    if not codigo_processo:
-        st.warning(tr("likert.missing_process_code"))
-
-    if st.button(tr("likert.submit"), disabled=not codigo_processo):
-        log = EvaluationLog(
-            codigo_processo=codigo_processo,
-            idioma=LANG,
-            provedor_ia=ai_config.provider,
-            modelo_ia=ai_config.model,
-            versao_prompt=PROMPT_VERSION,
-            hash_biblioteca=library_hash(DATA_PATH),
-            semente=pairing_result.seed if pairing_result is not None else 0,
-        )
-        # Se a IA nao estava configurada, as falhas por categoria sao todas a
-        # mesma causa raiz: so a entrada global entra no log.
-        log.falhas_ia = [{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(pairing_failures)
-
-        library_target = CANDIDATES_PATH if is_modo_avaliacao() else DATA_PATH
-        for par_index, pair in enumerate(pairs, start=1):
-            library_chosen = False
-            ai_chosen = False
-            for suggestion in pair.suggestions:
-                decision = pairing_decisions.get(suggestion.slot_id)
-                if decision is None:
-                    continue
-                log.sugestoes.append(
-                    SuggestionLogEntry(
-                        par=decision["par"],
-                        categoria=decision["categoria"],
-                        origem=decision["origin"],
-                        posicao=decision["posicao"],
-                        slot_id=suggestion.slot_id,
-                        escolhido=decision["incluido"],
-                        editado=decision["editado"],
-                        proporcao_edicao=decision["proporcao_edicao"],
-                        motivo_descarte=decision["motivo_descarte"],
-                        pontuacao=suggestion.pontuacao,
-                        abaixo_corte=suggestion.abaixo_corte,
-                    )
-                )
-                if decision["incluido"]:
-                    if suggestion.origin == ORIGIN_LIBRARY:
-                        library_chosen = True
-                    else:
-                        ai_chosen = True
-                        save_matrix_row_to_library(library_target, decision["row"], context, lang=LANG)
-            log.pares.append(
-                PairOutcome(
-                    par=par_index,
-                    categoria=pair.categoria,
-                    desfecho=outcome_for_pair(pair.sem_par, library_chosen, ai_chosen),
-                )
-            )
-
-        log.quantidade_riscos_manuais = len(st.session_state.manual_rows)
-        log.respostas_finais = {
-            "utilidade": utilidade,
-            "confianca": confianca,
-            "esforco": esforco,
-            "comentario": comentario.strip(),
-        }
-        save_evaluation_log(log, directory=LOG_DIR)
-        st.success(tr("likert.saved"))
 
     csv_content = to_csv(selected)
     latex_content = to_latex(selected)

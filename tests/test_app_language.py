@@ -37,7 +37,7 @@ def _generate(at: AppTest) -> AppTest:
 def test_suggestions_are_not_generated_on_initial_load():
     at = _run()
 
-    assert at.session_state.get("pairing_result") is None
+    assert at.session_state.get("mix_result") is None
     assert not [box for box in at.text_input if box.key and box.key.startswith("risco_")]
     info_texts = [info.value for info in at.info]
     assert any("Gerar sugestões" in text for text in info_texts)
@@ -74,7 +74,7 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
     _inclusion_checkboxes(at)[0].set_value(True)
     at.run()
     before = _prob_boxes(at)
-    pairs_total_before = at.metric[0].value
+    items_total_before = at.metric[0].value
 
     at.radio(key="lang").set_value("en")
     at.run()
@@ -87,7 +87,7 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
     assert _box(at, "ctx_modalidade").value == "pregao_poc"
     assert at.number_input(key="ctx_prazo").value == 24
     assert _prob_boxes(at) == before
-    assert at.metric[0].value == pairs_total_before
+    assert at.metric[0].value == items_total_before
     assert _box(at, "ctx_criticidade").format_func("alta") == "High"
 
     at.radio(key="lang").set_value("pt")
@@ -96,7 +96,7 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
     assert _box(at, "ctx_criticidade").value == "alta"
     assert _box(at, "ctx_criticidade").format_func("alta") == "Alta"
     assert _prob_boxes(at) == before
-    assert at.metric[0].value == pairs_total_before
+    assert at.metric[0].value == items_total_before
 
 
 def test_library_texts_follow_language_until_edited():
@@ -121,17 +121,17 @@ def test_library_texts_follow_language_until_edited():
     assert at.text_input(key=edited_key).value == "Texto revisado pelo usuário"
 
 
-def test_blind_suggestions_use_neutral_slot_ids_not_library_ids():
+def test_blind_suggestions_use_neutral_slot_ids_not_catalog_ids():
     at = _generate(_run())
 
-    pairing_result = at.session_state["pairing_result"]
-    assert pairing_result.pairs
-    for pair in pairing_result.pairs:
-        for suggestion in pair.suggestions:
-            assert suggestion.slot_id.startswith("S")
-            if suggestion.origin == "ia":
-                assert suggestion.row.id == ""
-            assert not suggestion.row.justificativa
+    mix_result = at.session_state["mix_result"]
+    assert mix_result.categories
+    for category in mix_result.categories:
+        for item in category.items:
+            assert item.slot_id.startswith("S")
+            if item.origin == "ia":
+                assert item.row.id == ""
+            assert not item.row.justificativa
 
     risco_keys = [box.key for box in at.text_input if box.key and box.key.startswith("risco_")]
     assert risco_keys
