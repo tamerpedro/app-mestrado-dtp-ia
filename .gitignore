@@ -13,3 +13,5 @@ pdf_last_page_*.png
 Thumbs.db
 data/avaliacao/
 data/candidatos_ia.csv
+data/casos/*.json
+!data/casos/exemplo.json
