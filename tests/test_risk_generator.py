@@ -7,8 +7,11 @@ from src.models import ContractContext, RiskItem
 from src.risk_generator import (
     RiskGenerationError,
     build_prompt,
+    build_prompt_v2,
     generate_risk_for_category,
+    generate_risks_for_category,
     validate_generated_risk,
+    validate_generated_risks_list,
 )
 
 
@@ -126,3 +129,90 @@ def test_generate_risk_for_category_raises_when_provider_fails():
 
     with pytest.raises(RiskGenerationError):
         generate_risk_for_category(provider, _context(), "Planejamento", _risk(), [], lang="pt")
+
+
+# --------------------------------------------------------------------------
+# v2: lista de N riscos por categoria, cientes de todo o catalogo
+# --------------------------------------------------------------------------
+
+
+def _valid_ai_list_payload(count: int = 2) -> list[dict]:
+    return [
+        {
+            "titulo": f"Risco gerado {index}",
+            "causa": f"Causa gerada {index}",
+            "consequencia": f"Consequencia gerada {index}",
+            "probabilidade_padrao": 3,
+            "impacto_padrao": 4,
+            "acao_preventiva": f"Ação preventiva {index}",
+            "acao_contingencia": f"Ação de contingência {index}",
+            "responsavel_sugerido": "Equipe gerada",
+        }
+        for index in range(1, count + 1)
+    ]
+
+
+def test_build_prompt_v2_includes_all_catalog_titles_and_generic_instruction():
+    titles = ["Risco A da categoria X", "Risco B da categoria Y"]
+
+    prompt = build_prompt_v2(_context(), "Planejamento", 3, titles, [_risk()], lang="pt")
+
+    assert "Risco A da categoria X" in prompt
+    assert "Risco B da categoria Y" in prompt
+    assert "genérico" in prompt or "genéric" in prompt
+    assert "Não repita" in prompt or "não repita" in prompt.lower()
+    assert "3" in prompt
+
+
+def test_build_prompt_v2_requests_exact_quantity():
+    prompt = build_prompt_v2(_context(), "Planejamento", 5, [], [], lang="pt")
+
+    assert "5 riscos" in prompt
+
+
+def test_generate_risks_for_category_parses_valid_json_list():
+    provider = FakeProvider(json.dumps(_valid_ai_list_payload(3)))
+
+    generated = generate_risks_for_category(
+        provider, _context(), "Planejamento", 3, ["Risco existente"], [_risk()], lang="pt"
+    )
+
+    assert len(generated) == 3
+    assert generated[0].titulo == "Risco gerado 1"
+    assert len(provider.calls) == 1
+
+
+def test_generate_risks_for_category_parses_fenced_json_list():
+    raw_response = "```json\n" + json.dumps(_valid_ai_list_payload(2)) + "\n```"
+    provider = FakeProvider(raw_response)
+
+    generated = generate_risks_for_category(provider, _context(), "Planejamento", 2, [], [], lang="pt")
+
+    assert len(generated) == 2
+
+
+def test_validate_generated_risks_list_rejects_empty_list():
+    with pytest.raises(RiskGenerationError):
+        validate_generated_risks_list([])
+
+
+def test_validate_generated_risks_list_rejects_invalid_item():
+    payload = _valid_ai_list_payload(1)
+    payload[0]["titulo"] = "   "
+
+    with pytest.raises(RiskGenerationError):
+        validate_generated_risks_list(payload)
+
+
+def test_generate_risks_for_category_raises_on_non_list_json():
+    provider = FakeProvider(json.dumps({"titulo": "nao e uma lista"}))
+
+    with pytest.raises(RiskGenerationError):
+        generate_risks_for_category(provider, _context(), "Planejamento", 1, [], [], lang="pt")
+
+
+def test_generate_risks_for_category_raises_when_provider_fails():
+    provider = FakeProvider(fail=True)
+
+    with pytest.raises(RiskGenerationError):
+        generate_risks_for_category(provider, _context(), "Planejamento", 2, [], [], lang="pt")

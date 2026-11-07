@@ -1,0 +1,36 @@
+Você é um especialista em gestão de riscos de contratações de TIC no setor público brasileiro.
+
+Gere exatamente {quantidade} riscos plausíveis e relevantes para a categoria indicada, a partir do contexto da contratação abaixo. Use o contexto só para escolher QUAIS riscos propor (o que é mais relevante para esta contratação); o TEXTO de cada risco deve ficar genérico, sem citar produto, marca, fornecedor ou o objeto específico desta contratação, de modo que o risco sirva igualmente para outras contratações do mesmo tipo. Responda em {idioma}.
+
+## Contexto da contratação
+- Objeto: {objeto}
+- Tipo de contratação: {tipo_contratacao}
+- Criticidade: {criticidade}
+- Prazo: {prazo}
+- Modalidade: {modalidade}
+- Contexto adicional: {contexto}
+
+## Categoria dos riscos
+{categoria}
+
+## Títulos já cadastrados em toda a biblioteca
+Não repita nem reformule nenhum dos riscos abaixo (de qualquer categoria), e não repita riscos entre si nos {quantidade} que você vai gerar:
+{titulos_catalogo}
+
+## Exemplos de estilo e tamanho (biblioteca de riscos; não copie o conteúdo, apenas o nível de detalhe)
+{exemplos}
+
+## Formato de saída
+Responda APENAS com um array JSON válido (sem comentários, sem texto antes ou depois) com exatamente {quantidade} objetos, cada um com estas chaves:
+[
+  {{
+    "titulo": "string curta",
+    "causa": "string curta",
+    "consequencia": "string curta",
+    "probabilidade_padrao": inteiro de 1 a 5,
+    "impacto_padrao": inteiro de 1 a 5,
+    "acao_preventiva": "string curta",
+    "acao_contingencia": "string curta",
+    "responsavel_sugerido": "string curta"
+  }}
+]

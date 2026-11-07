@@ -18,6 +18,9 @@ from .models import ContractContext, RiskItem
 PROMPT_VERSION = "v1"
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "gerar_risco_v1.txt"
 
+PROMPT_VERSION_V2 = "v2"
+PROMPT_PATH_V2 = Path(__file__).resolve().parent.parent / "prompts" / "gerar_risco_v2.txt"
+
 MAX_EXAMPLE_FIELD_CHARS = 160
 MAX_EXAMPLES = 3
 MIN_EXAMPLES = 2
@@ -174,3 +177,88 @@ def generate_risk_for_category(
     except AIProviderError as exc:
         raise RiskGenerationError(str(exc)) from exc
     return validate_generated_risk(_extract_json(raw))
+
+
+# --------------------------------------------------------------------------
+# v2: lista de N riscos genericos por categoria, cientes de todo o catalogo
+# (catalogo + IA misturados na interface, sem pareamento 1-a-1)
+# --------------------------------------------------------------------------
+
+
+def load_prompt_template_v2() -> str:
+    return PROMPT_PATH_V2.read_text(encoding="utf-8")
+
+
+def build_prompt_v2(
+    context: ContractContext,
+    category_label_text: str,
+    count: int,
+    catalog_titles: list[str],
+    example_risks: list[RiskItem],
+    lang: str = "pt",
+) -> str:
+    """Monta o prompt v2: pede ``count`` riscos genericos, cientes de todos os
+    titulos ja cadastrados (``catalog_titles``), a partir do template
+    versionado (``PROMPT_PATH_V2``)."""
+    examples = example_risks[:MAX_EXAMPLES]
+    examples_text = "\n".join(_example_block(risk, lang) for risk in examples) or "(nenhum exemplo disponível)"
+    titles_text = "\n".join(f"- {title}" for title in catalog_titles if title) or "(nenhum risco cadastrado ainda)"
+    template = load_prompt_template_v2()
+    return template.format(
+        idioma=LANGUAGE_NAMES.get(lang, LANGUAGE_NAMES["pt"]),
+        objeto=context.objeto,
+        tipo_contratacao=context.tipo_contratacao,
+        criticidade=context.criticidade,
+        prazo=context.prazo,
+        modalidade=context.modalidade,
+        contexto=context.contexto,
+        categoria=category_label_text,
+        quantidade=count,
+        titulos_catalogo=titles_text,
+        exemplos=examples_text,
+    )
+
+
+_JSON_LIST_RE = re.compile(r"\[.*\]", re.DOTALL)
+
+
+def _extract_json_list(raw_text: str) -> list:
+    text = (raw_text or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        text = text.split("\n", 1)[1] if "\n" in text else text
+    match = _JSON_LIST_RE.search(text)
+    candidate = match.group(0) if match else text
+    try:
+        data = json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        raise RiskGenerationError(f"Resposta da IA não é um JSON válido: {exc}") from exc
+    if not isinstance(data, list):
+        raise RiskGenerationError("Resposta da IA não é uma lista JSON.")
+    return data
+
+
+def validate_generated_risks_list(data: list) -> list[GeneratedRisk]:
+    """Valida cada item da lista como um ``GeneratedRisk`` (mesmas regras do v1)."""
+    if not data:
+        raise RiskGenerationError("A resposta da IA veio com uma lista vazia.")
+    return [validate_generated_risk(item) for item in data]
+
+
+def generate_risks_for_category(
+    provider: AIProvider,
+    context: ContractContext,
+    category_label_text: str,
+    count: int,
+    catalog_titles: list[str],
+    example_risks: list[RiskItem],
+    lang: str = "pt",
+) -> list[GeneratedRisk]:
+    """Gera e valida ``count`` riscos de IA para a categoria (chamada unica);
+    falhas viram ``RiskGenerationError``."""
+    prompt = build_prompt_v2(context, category_label_text, count, catalog_titles, example_risks, lang=lang)
+    try:
+        raw = provider.generate(prompt)
+    except AIProviderError as exc:
+        raise RiskGenerationError(str(exc)) from exc
+    return validate_generated_risks_list(_extract_json_list(raw))
