@@ -25,7 +25,7 @@ DEFAULT_MAX_RETRIES = 1  # 1 nova tentativa = 2 chamadas no total
 TEMPERATURE = 0.0
 
 DEFAULT_MODELS = {
-    "anthropic": "claude-sonnet-4-5-20250929",
+    "anthropic": "claude-sonnet-5-5",
     "openai": "gpt-4o-mini",
 }
 

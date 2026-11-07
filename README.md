@@ -71,7 +71,7 @@ Não há LLM local no ambiente; defina o provedor e a chave por variável de amb
 ```toml
 # .streamlit/secrets.toml
 AI_PROVIDER = "anthropic"       # ou "openai"
-AI_MODEL = "claude-sonnet-4-5-20250929"
+AI_MODEL = "claude-sonnet-5-5"
 ANTHROPIC_API_KEY = "sk-ant-..."
 # Para um provedor compativel com OpenAI:
 # OPENAI_API_KEY = "sk-..."
