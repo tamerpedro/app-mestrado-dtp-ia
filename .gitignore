@@ -12,3 +12,5 @@ reference_*
 pdf_last_page_*.png
 .DS_Store
 Thumbs.db
+data/avaliacao/
+data/candidatos_ia.csv
