@@ -97,7 +97,7 @@ def test_base_library_is_fully_translated_to_english():
         assert risk.palavras_chave_en, risk.id
     first = next(risk for risk in risks if risk.id == "R001")
     assert first.text("titulo", "en") == "Insufficient technical specification"
-    assert first.text("titulo", "pt") == "Especificacao tecnica insuficiente"
+    assert first.text("titulo", "pt") == "Especificação técnica insuficiente"
 
 
 def test_library_without_english_columns_falls_back_to_portuguese():
