@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import base64
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
 from html import escape
 import io
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import streamlit as st
 from openpyxl import Workbook
 
+from src.ai_provider import AIProviderError, FakeProvider, build_provider, load_ai_config
 from src.docx_exporter import to_docx
 from src.domain import (
     ACTION_STATUSES,
@@ -28,16 +30,38 @@ from src.domain import (
     risk_level_label,
     strategy_label,
 )
+from src.eval_log import (
+    DISCARD_REASONS,
+    EvaluationLog,
+    PairOutcome,
+    SuggestionLogEntry,
+    edit_ratio,
+    outcome_for_pair,
+    save_evaluation_log,
+)
+from src.eval_mode import is_modo_avaliacao, library_hash
 from src.i18n import DEFAULT_LANGUAGE, LANGUAGES, normalize_language, t
 from src.exporters import EXPORT_FIELDS, row_to_export_dict, selected_rows, to_csv, to_latex
 from src.models import ActionItem, ContractContext, MatrixRow
+from src.pairing import ORIGIN_AI, ORIGIN_LIBRARY, CategoryPair, build_category_pairs
+from src.risk_generator import PROMPT_VERSION
 from src.risk_library import load_risks, save_matrix_row_to_library
 from src.scoring import IMPACT_OPTIONS, PROBABILITY_OPTIONS, canonical_scale, risk_level
-from src.suggestions import suggest_risks
 
 
 DATA_PATH = Path("data/riscos_base.csv")
+CANDIDATES_PATH = Path("data/candidatos_ia.csv")
+LOG_DIR = Path("data/avaliacao")
 LOGO_PATH = Path("assets/dataprev-logo.png")
+LIKERT_SCALE = [1, 2, 3, 4, 5]
+
+# Mesmo corte padrao de src.suggestions.suggest_risks: nao altera a logica de pontuacao,
+# so reaproveita o mesmo limiar para escolher o risco de biblioteca de cada par.
+DEFAULT_MINIMUM_SCORE = 2
+
+_SLOT_ID_RE = re.compile(r"S\d{2}")
+
+
 def resolve_language() -> str:
     """Idioma da sessao: parametro ?lang= na primeira visita, depois o seletor."""
     if "lang" not in st.session_state:
@@ -341,8 +365,7 @@ def image_to_data_uri(path: Path) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def render_app_header(context: ContractContext, suggested_rows: list[MatrixRow]) -> None:
-    high_count = count_high_or_critical(suggested_rows)
+def render_app_header(context: ContractContext, total_pairs: int, sem_par_count: int) -> None:
     logo_uri = image_to_data_uri(LOGO_PATH)
     logo_html = (
         f'<div class="dtp-logo-wrap"><img src="{logo_uri}" alt="{escape(tr("app.logo_alt"))}"></div>'
@@ -363,16 +386,12 @@ def render_app_header(context: ContractContext, suggested_rows: list[MatrixRow])
             <div class="dtp-status-grid">
                 <div class="dtp-status"><span>{escape(tr("header.type"))}</span><strong>{escape(contract_type_label(context.tipo_contratacao, LANG))}</strong></div>
                 <div class="dtp-status"><span>{escape(tr("header.criticality"))}</span><strong>{escape(criticality_label(context.criticidade, LANG))}</strong></div>
-                <div class="dtp-status"><span>{escape(tr("header.suggested"))}</span><strong>{escape(tr("header.suggested_value", total=len(suggested_rows), high=high_count))}</strong></div>
+                <div class="dtp-status"><span>{escape(tr("header.pairs"))}</span><strong>{escape(tr("header.pairs_value", total=total_pairs, sem_par=sem_par_count))}</strong></div>
             </div>
         </section>
         """,
         unsafe_allow_html=True,
     )
-
-
-def count_high_or_critical(rows: list[MatrixRow]) -> int:
-    return sum(1 for row in rows if row.nivel in {"high", "critical"})
 
 
 def render_section_label(label: str) -> None:
@@ -396,109 +415,43 @@ def context_state_key(context: ContractContext) -> str:
     )
 
 
-def ensure_suggestion_overrides(context: ContractContext) -> None:
+def _clear_blind_widget_state() -> None:
+    """Limpa os widgets de S01..S99 para que uma nova rodada de pares (apos
+    mudar o contexto) nao herde textos editados de uma rodada anterior."""
+    for state_key in list(st.session_state.keys()):
+        if _SLOT_ID_RE.search(state_key):
+            del st.session_state[state_key]
+
+
+def ensure_pairing_result(context: ContractContext, risks: list, provider, lang: str):
+    """Monta (e cacheia por contexto) os pares biblioteca+IA por categoria.
+
+    So chama a IA de novo quando o contexto muda (nao o idioma: o texto da
+    biblioteca se adapta ao idioma na propria renderizacao, via
+    ``risks_by_id``; o texto gerado pela IA fica congelado no idioma em que
+    foi gerado). Evita gerar (e sortear a ordem) a cada interacao do
+    Streamlit, e evita perder edicoes do usuario so por trocar o idioma.
+    """
     key = context_state_key(context)
-    if st.session_state.get("suggestion_context_key") != key:
-        st.session_state.suggestion_context_key = key
-        st.session_state.force_include_ids = set()
-        st.session_state.force_exclude_ids = set()
-
-
-def split_suggestion_rows(
-    base_suggested_rows: list[MatrixRow],
-    all_library_rows: list[MatrixRow],
-) -> tuple[list[MatrixRow], list[MatrixRow]]:
-    base_ids = {row.id for row in base_suggested_rows}
-    include_ids = set(st.session_state.get("force_include_ids", set()))
-    exclude_ids = set(st.session_state.get("force_exclude_ids", set()))
-    selected_ids = (base_ids | include_ids) - exclude_ids
-
-    suggested = [row for row in all_library_rows if row.id in selected_ids]
-    not_suggested = [row for row in all_library_rows if row.id not in selected_ids]
-    return suggested, not_suggested
-
-
-def suggestion_table_data(rows: list[MatrixRow]) -> list[dict[str, str]]:
-    return [
-        {
-            tr("col.id"): row.id,
-            tr("col.risk"): row.risco,
-            tr("col.category"): category_label(row.categoria, LANG),
-            tr("col.probability"): probability_label(row.probabilidade, LANG),
-            tr("col.impact"): impact_label(row.impacto, LANG),
-            tr("col.level"): risk_level_label(row.nivel, LANG),
-        }
-        for row in rows
-    ]
-
-
-def grouped_row_indexes(rows: list[MatrixRow]) -> list[tuple[str, list[tuple[int, MatrixRow]]]]:
-    grouped: dict[str, list[tuple[int, MatrixRow]]] = defaultdict(list)
-    for index, row in enumerate(rows):
-        grouped[row.categoria or "planejamento"].append((index, row))
-
-    def sort_key(item: tuple[str, list[tuple[int, MatrixRow]]]) -> tuple[int, str]:
-        category = item[0]
-        if category in CATEGORIES:
-            return (CATEGORIES.index(category), category)
-        return (len(CATEGORIES), category)
-
-    return sorted(grouped.items(), key=sort_key)
-
-
-def render_grouped_suggestion_tables(rows: list[MatrixRow], empty_message: str) -> None:
-    if not rows:
-        st.info(empty_message)
-        return
-
-    for category, indexed_rows in grouped_row_indexes(rows):
-        category_rows = [row for _, row in indexed_rows]
-        with st.expander(f"{category_label(category, LANG)} ({len(category_rows)})", expanded=True):
-            st.dataframe(suggestion_table_data(category_rows), width="stretch", hide_index=True)
-
-
-def row_option_label(row_lookup: dict[str, MatrixRow], risk_id: str) -> str:
-    row = row_lookup[risk_id]
-    return f"{row.id} - {row.risco}"
-
-
-def move_risk_to_suggested(risk_id: str) -> None:
-    st.session_state.force_include_ids.add(risk_id)
-    st.session_state.force_exclude_ids.discard(risk_id)
-    st.rerun()
-
-
-def move_risk_to_not_suggested(risk_id: str) -> None:
-    st.session_state.force_exclude_ids.add(risk_id)
-    st.session_state.force_include_ids.discard(risk_id)
-    st.rerun()
-
-
-def render_suggestion_mover(
-    rows: list[MatrixRow],
-    select_label: str,
-    button_label: str,
-    key_prefix: str,
-    on_move,
-) -> None:
-    if not rows:
-        st.info(tr("empty.list"))
-        return
-
-    row_lookup = {row.id: row for row in rows}
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        selected_id = select(
-            select_label,
-            [row.id for row in rows],
-            format_func=lambda risk_id: row_option_label(row_lookup, risk_id),
-            key=f"{key_prefix}_select",
+    if st.session_state.get("pairing_context_key") != key:
+        _clear_blind_widget_state()
+        failures: list[dict] = []
+        result = build_category_pairs(
+            risks,
+            context,
+            provider,
+            minimum_score=DEFAULT_MINIMUM_SCORE,
+            lang=lang,
+            on_ai_failure=lambda categoria, erro: failures.append({"categoria": categoria, "erro": erro}),
         )
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button(button_label, key=f"{key_prefix}_button"):
-            on_move(selected_id)
+        st.session_state.pairing_context_key = key
+        st.session_state.pairing_result = result
+        st.session_state.pairing_failures = failures
+    return st.session_state.pairing_result, st.session_state.pairing_failures
+
+
+def row_text_blob(row: MatrixRow) -> str:
+    return "||".join([row.risco, row.causa, row.consequencia, row.acao_preventiva, row.acao_contingencia])
 
 
 def render_language_selector() -> None:
@@ -524,6 +477,7 @@ def build_context() -> ContractContext:
             unsafe_allow_html=True,
         )
         render_language_selector()
+        st.text_input(tr("process.code"), help=tr("process.help"), key="codigo_processo")
         st.header(tr("sidebar.contract"))
         objeto = st.text_area(tr("field.object"), value=tr("field.object_default"), key="ctx_objeto")
         tipo = select(
@@ -769,6 +723,7 @@ def edit_action_items(risk_key: str, slot: str, base_actions: list[ActionItem]) 
 
 
 def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow]:
+    """Edicao dos riscos manuais (inclusao continua igual; nada aqui e as cegas)."""
     edited_by_index: dict[int, MatrixRow] = {}
     for category, indexed_rows in grouped_row_indexes(rows):
         render_section_label(f"{category_label(category, LANG)} ({len(indexed_rows)})")
@@ -841,7 +796,8 @@ def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow
                         tags=row.tags,
                     )
                     if "manual" in row.tags:
-                        if st.button(tr("review.save_library"), key=f"save_library_{risk_key}"):
+                        disabled = is_modo_avaliacao()
+                        if st.button(tr("review.save_library"), key=f"save_library_{risk_key}", disabled=disabled):
                             result = save_matrix_row_to_library(DATA_PATH, edited_row, context, lang=LANG)
                             if result.saved:
                                 st.success(tr("library.saved", id=result.risk_id))
@@ -850,8 +806,139 @@ def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow
                                 st.info(tr("library.exists", id=result.risk_id))
                             else:
                                 st.error(tr("library.error", detail=result.detail or result.message))
+                        if disabled:
+                            st.caption(tr("library.save_disabled"))
                     edited_by_index[index] = edited_row
     return [edited_by_index[index] for index in range(len(rows))]
+
+
+def grouped_row_indexes(rows: list[MatrixRow]) -> list[tuple[str, list[tuple[int, MatrixRow]]]]:
+    grouped: dict[str, list[tuple[int, MatrixRow]]] = defaultdict(list)
+    for index, row in enumerate(rows):
+        grouped[row.categoria or "planejamento"].append((index, row))
+
+    def sort_key(item: tuple[str, list[tuple[int, MatrixRow]]]) -> tuple[int, str]:
+        category = item[0]
+        if category in CATEGORIES:
+            return (CATEGORIES.index(category), category)
+        return (len(CATEGORIES), category)
+
+    return sorted(grouped.items(), key=sort_key)
+
+
+def render_blind_pair(
+    pair: CategoryPair, par_index: int, decisions: dict[str, dict], risks_by_id: dict[str, object]
+) -> None:
+    """Renderiza um par (ou uma sugestao isolada, se ``sem_par``) e preenche
+    ``decisions[slot_id]`` com a decisao do usuario para essa sugestao."""
+    sem_par_suffix = tr("pair.sem_par_suffix")
+    suffix = f" — {sem_par_suffix}" if pair.sem_par else ""
+    render_section_label(f"{category_label(pair.categoria, LANG)}{suffix}")
+
+    for posicao, suggestion in enumerate(pair.suggestions, start=1):
+        slot_key = suggestion.slot_id
+        row = suggestion.row
+        # Sugestao de biblioteca: o texto acompanha o idioma atual (consulta o
+        # RiskItem original); sugestao de IA fica congelada no idioma gerado.
+        source_risk = risks_by_id.get(row.id) if suggestion.origin == ORIGIN_LIBRARY else None
+        if source_risk is not None:
+            default_risco = source_risk.text("titulo", LANG)
+            default_causa = source_risk.text("causa", LANG)
+            default_consequencias = [source_risk.text("consequencia", LANG)]
+            default_preventivas = [ActionItem(source_risk.text("acao_preventiva", LANG))]
+            default_contingencias = [ActionItem(source_risk.text("acao_contingencia", LANG))]
+        else:
+            default_risco = row.risco
+            default_causa = row.causa
+            default_consequencias = row.consequencias
+            default_preventivas = row.acoes_preventivas
+            default_contingencias = row.acoes_contingencia
+
+        with st.expander(f"{slot_key} - {default_risco}", expanded=False):
+            incluido = st.checkbox(tr("review.include"), value=False, key=f"incl_{slot_key}")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                probabilidade = select(
+                    tr("field.probability"),
+                    PROBABILITY_OPTIONS,
+                    index=PROBABILITY_OPTIONS.index(canonical_scale(row.probabilidade)),
+                    format_func=label_in(probability_label),
+                    key=f"prob_{slot_key}",
+                )
+            with col2:
+                impacto = select(
+                    tr("field.impact"),
+                    IMPACT_OPTIONS,
+                    index=IMPACT_OPTIONS.index(canonical_scale(row.impacto)),
+                    format_func=label_in(impact_label),
+                    key=f"impacto_{slot_key}",
+                )
+            with col3:
+                nivel = risk_level(probabilidade, impacto)
+                st.metric(tr("field.level"), risk_level_label(nivel, LANG))
+
+            risco = library_text(st.text_input, tr("field.risk"), default_risco, key=f"risco_{slot_key}")
+            causa = library_text(st.text_area, tr("field.cause"), default_causa, key=f"causa_{slot_key}")
+            render_section_label(tr("section.consequences"))
+            consequencias = edit_text_items(slot_key, "consequence", default_consequencias)
+            render_section_label(tr("section.preventive"))
+            preventivas = edit_action_items(slot_key, "preventive", default_preventivas)
+            render_section_label(tr("section.contingency"))
+            contingencias = edit_action_items(slot_key, "contingency", default_contingencias)
+
+            motivo_descarte = None
+            if not incluido:
+                motivo_codigo = select(
+                    tr("discard.reason"),
+                    ["", *DISCARD_REASONS],
+                    format_func=lambda code: tr(f"discard.reason.{code}") if code else tr("discard.reason.none"),
+                    key=f"motivo_{slot_key}",
+                )
+                motivo_descarte = motivo_codigo or None
+
+            edited_row = MatrixRow(
+                id=slot_key,
+                risco=risco,
+                categoria=pair.categoria,
+                causa=causa,
+                consequencias=consequencias,
+                probabilidade=probabilidade,
+                impacto=impacto,
+                nivel=nivel,
+                estrategia=row.estrategia,
+                acoes_preventivas=preventivas,
+                acoes_contingencia=contingencias,
+                selecionado=incluido,
+                tags=row.tags,
+            )
+            # Linha de base no idioma atual (nao a de geracao): troca de idioma sozinha
+            # nao deve contar como edicao do usuario.
+            baseline_row = MatrixRow(
+                id=row.id,
+                risco=default_risco,
+                categoria=pair.categoria,
+                causa=default_causa,
+                consequencias=default_consequencias,
+                probabilidade=row.probabilidade,
+                impacto=row.impacto,
+                nivel=row.nivel,
+                estrategia=row.estrategia,
+                acoes_preventivas=default_preventivas,
+                acoes_contingencia=default_contingencias,
+                tags=row.tags,
+            )
+            ratio = edit_ratio(row_text_blob(baseline_row), row_text_blob(edited_row))
+            decisions[slot_key] = {
+                "row": edited_row,
+                "origin": suggestion.origin,
+                "categoria": pair.categoria,
+                "par": par_index,
+                "posicao": posicao,
+                "incluido": incluido,
+                "editado": ratio > 0.0,
+                "proporcao_edicao": ratio,
+                "motivo_descarte": motivo_descarte,
+            }
 
 
 context = build_context()
@@ -860,53 +947,107 @@ try:
 except ValueError as exc:
     st.error(tr("error.load_library", detail=exc))
     st.stop()
-base_suggested_rows = suggest_risks(risks, context, lang=LANG)
-all_library_rows = suggest_risks(risks, context, minimum_score=0, max_per_category=None, lang=LANG)
-ensure_suggestion_overrides(context)
-suggested_rows, not_suggested_rows = split_suggestion_rows(base_suggested_rows, all_library_rows)
+risks_by_id = {risk.id: risk for risk in risks}
 
-render_app_header(context, suggested_rows)
+ai_config = load_ai_config()
+ai_config_error: str | None = None
+try:
+    provider = build_provider(ai_config)
+except AIProviderError as exc:
+    provider = FakeProvider(fail=True)
+    ai_config_error = str(exc)
+
+pairing_result, pairing_failures = ensure_pairing_result(context, risks, provider, LANG)
+sem_par_count = sum(1 for pair in pairing_result.pairs if pair.sem_par)
+
+render_app_header(context, len(pairing_result.pairs), sem_par_count)
+
+if ai_config_error:
+    st.warning(tr("ai.unavailable", detail=ai_config_error))
+elif pairing_failures:
+    st.warning(tr("ai.partial_failure", count=len(pairing_failures)))
 
 tab1, tab2, tab3 = st.tabs([tr("tab.suggestions"), tr("tab.review"), tr("tab.export")])
 
+pairing_decisions: dict[str, dict] = {}
+
 with tab1:
     render_panel_title(tr("panel.suggested"))
+    total_suggestions = sum(len(pair.suggestions) for pair in pairing_result.pairs)
     col1, col2, col3 = st.columns(3)
-    col1.metric(tr("metric.suggestions"), len(suggested_rows))
-    col2.metric(tr("metric.high"), count_high_or_critical(suggested_rows))
-    col3.metric(tr("metric.categories"), len({row.categoria for row in suggested_rows}))
-    render_grouped_suggestion_tables(suggested_rows, tr("empty.suggested"))
-    render_suggestion_mover(
-        suggested_rows,
-        tr("mover.select_suggested"),
-        tr("mover.remove"),
-        "remove_suggested",
-        move_risk_to_not_suggested,
-    )
+    col1.metric(tr("metric.pairs_total"), total_suggestions)
+    col2.metric(tr("metric.categories"), len(pairing_result.pairs))
+    col3.metric(tr("metric.sem_par"), sem_par_count)
 
-    render_panel_title(tr("panel.not_included"))
-    col1, col2, col3 = st.columns(3)
-    col1.metric(tr("metric.available"), len(not_suggested_rows))
-    col2.metric(tr("metric.high"), count_high_or_critical(not_suggested_rows))
-    col3.metric(tr("metric.categories"), len({row.categoria for row in not_suggested_rows}))
-    render_grouped_suggestion_tables(not_suggested_rows, tr("empty.not_included"))
-    render_suggestion_mover(
-        not_suggested_rows,
-        tr("mover.select_not_included"),
-        tr("mover.include"),
-        "include_not_suggested",
-        move_risk_to_suggested,
-    )
+    if not pairing_result.pairs:
+        st.info(tr("empty.suggested"))
+    else:
+        for par_index, pair in enumerate(pairing_result.pairs, start=1):
+            render_blind_pair(pair, par_index, pairing_decisions, risks_by_id)
 
 with tab2:
     render_panel_title(tr("panel.review"))
     add_manual_risk_form()
-    all_review_rows = [*suggested_rows, *st.session_state.manual_rows]
-    edited_rows = edit_rows(all_review_rows, context)
+    edited_manual_rows = edit_rows(st.session_state.manual_rows, context)
 
 with tab3:
     render_panel_title(tr("panel.final"))
-    selected = selected_rows(edited_rows if "edited_rows" in locals() else suggested_rows)
+
+    slot_origin = {
+        suggestion.slot_id: suggestion.origin for pair in pairing_result.pairs for suggestion in pair.suggestions
+    }
+    all_rows_for_export = [decision["row"] for decision in pairing_decisions.values()] + edited_manual_rows
+    selected = selected_rows(all_rows_for_export)
+
+    render_section_label(tr("reveal.title"))
+    reveal_table = []
+    for row in selected:
+        origin = slot_origin.get(row.id, "manual")
+        origin_key = origin if origin in (ORIGIN_LIBRARY, ORIGIN_AI) else "manual"
+        reveal_table.append(
+            {
+                tr("col.id"): row.id,
+                tr("reveal.origin_column"): tr(f"reveal.{origin_key}"),
+                tr("col.risk"): row.risco,
+                tr("col.category"): category_label(row.categoria, LANG),
+            }
+        )
+    if reveal_table:
+        st.dataframe(reveal_table, width="stretch", hide_index=True)
+    else:
+        st.info(tr("empty.list"))
+
+    library_count = sum(1 for row in selected if slot_origin.get(row.id) == ORIGIN_LIBRARY)
+    ai_count = sum(1 for row in selected if slot_origin.get(row.id) == ORIGIN_AI)
+    manual_count = sum(1 for row in selected if row.id not in slot_origin)
+    edited_count = sum(
+        1
+        for row in selected
+        if row.id in pairing_decisions and pairing_decisions[row.id]["editado"]
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(tr("reveal.library"), library_count)
+    col2.metric(tr("reveal.ai"), ai_count)
+    col3.metric(tr("reveal.manual_metric"), manual_count)
+    col4.metric(tr("reveal.edited"), edited_count)
+
+    outcome_counts = Counter(
+        outcome_for_pair(
+            pair.sem_par,
+            any(pairing_decisions.get(s.slot_id, {}).get("incluido") and s.origin == ORIGIN_LIBRARY for s in pair.suggestions),
+            any(pairing_decisions.get(s.slot_id, {}).get("incluido") and s.origin == ORIGIN_AI for s in pair.suggestions),
+        )
+        for pair in pairing_result.pairs
+    )
+    outcome_table = [
+        {tr("outcome.column_label"): tr(f"outcome.{code}"), tr("outcome.count_label"): outcome_counts.get(code, 0)}
+        for code in ["so_biblioteca", "so_ia", "ambos", "nenhum", "sem_par"]
+        if outcome_counts.get(code, 0) > 0
+    ]
+    if outcome_table:
+        st.dataframe(outcome_table, width="stretch", hide_index=True)
+
     col1, col2, col3 = st.columns(3)
     col1.metric(tr("metric.selected"), len(selected))
     col2.metric(tr("metric.preventive"), sum(len(row.acoes_preventivas) for row in selected))
@@ -914,6 +1055,75 @@ with tab3:
     st.dataframe(final_matrix_table(selected), width="stretch", hide_index=True)
     if LANG != DEFAULT_LANGUAGE:
         st.caption(tr("export.pt_only"))
+
+    render_section_label(tr("likert.header"))
+    utilidade = st.radio(tr("likert.usefulness"), LIKERT_SCALE, horizontal=True, key="likert_utilidade")
+    confianca = st.radio(tr("likert.confidence"), LIKERT_SCALE, horizontal=True, key="likert_confianca")
+    esforco = st.radio(tr("likert.effort"), LIKERT_SCALE, horizontal=True, key="likert_esforco")
+    comentario = st.text_area(tr("likert.comment"), key="likert_comentario")
+
+    codigo_processo = (st.session_state.get("codigo_processo") or "").strip()
+    if not codigo_processo:
+        st.warning(tr("likert.missing_process_code"))
+
+    if st.button(tr("likert.submit"), disabled=not codigo_processo):
+        log = EvaluationLog(
+            codigo_processo=codigo_processo,
+            idioma=LANG,
+            provedor_ia=ai_config.provider,
+            modelo_ia=ai_config.model,
+            versao_prompt=PROMPT_VERSION,
+            hash_biblioteca=library_hash(DATA_PATH),
+            semente=pairing_result.seed,
+        )
+        # Se a IA nao estava configurada, as falhas por categoria sao todas a
+        # mesma causa raiz: so a entrada global entra no log.
+        log.falhas_ia = [{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(pairing_failures)
+
+        library_target = CANDIDATES_PATH if is_modo_avaliacao() else DATA_PATH
+        for par_index, pair in enumerate(pairing_result.pairs, start=1):
+            library_chosen = False
+            ai_chosen = False
+            for suggestion in pair.suggestions:
+                decision = pairing_decisions.get(suggestion.slot_id)
+                if decision is None:
+                    continue
+                log.sugestoes.append(
+                    SuggestionLogEntry(
+                        par=decision["par"],
+                        categoria=decision["categoria"],
+                        origem=decision["origin"],
+                        posicao=decision["posicao"],
+                        slot_id=suggestion.slot_id,
+                        escolhido=decision["incluido"],
+                        editado=decision["editado"],
+                        proporcao_edicao=decision["proporcao_edicao"],
+                        motivo_descarte=decision["motivo_descarte"],
+                    )
+                )
+                if decision["incluido"]:
+                    if suggestion.origin == ORIGIN_LIBRARY:
+                        library_chosen = True
+                    else:
+                        ai_chosen = True
+                        save_matrix_row_to_library(library_target, decision["row"], context, lang=LANG)
+            log.pares.append(
+                PairOutcome(
+                    par=par_index,
+                    categoria=pair.categoria,
+                    desfecho=outcome_for_pair(pair.sem_par, library_chosen, ai_chosen),
+                )
+            )
+
+        log.quantidade_riscos_manuais = len(st.session_state.manual_rows)
+        log.respostas_finais = {
+            "utilidade": utilidade,
+            "confianca": confianca,
+            "esforco": esforco,
+            "comentario": comentario.strip(),
+        }
+        save_evaluation_log(log, directory=LOG_DIR)
+        st.success(tr("likert.saved"))
 
     csv_content = to_csv(selected)
     latex_content = to_latex(selected)

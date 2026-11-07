@@ -22,6 +22,10 @@ def _box(at: AppTest, key: str):
     return next(box for box in at.selectbox if box.key and box.key.split("@")[0] == key)
 
 
+def _inclusion_checkboxes(at: AppTest):
+    return [checkbox for checkbox in at.checkbox if checkbox.key and checkbox.key.startswith("incl_")]
+
+
 def test_default_language_is_portuguese():
     at = _run()
 
@@ -37,7 +41,7 @@ def test_query_param_opens_in_english():
     assert [tab.label for tab in at.tabs] == ["Suggestions", "Human review", "Export"]
 
 
-def test_switching_language_keeps_inputs_and_review_edits():
+def test_switching_language_keeps_inputs_and_blind_review_edits():
     at = _run()
     at.text_area(key="ctx_objeto").input("Contratação de licenças de software com implantação")
     _box(at, "ctx_criticidade").select("alta")
@@ -48,10 +52,10 @@ def test_switching_language_keeps_inputs_and_review_edits():
     first_prob = sorted(_prob_boxes(at))[0]
     _box(at, first_prob).select(5)
     at.run()
-    at.button(key="remove_suggested_button").click()
+    _inclusion_checkboxes(at)[0].set_value(True)
     at.run()
     before = _prob_boxes(at)
-    suggested_before = at.metric[0].value
+    pairs_total_before = at.metric[0].value
 
     at.radio(key="lang").set_value("en")
     at.run()
@@ -64,7 +68,7 @@ def test_switching_language_keeps_inputs_and_review_edits():
     assert _box(at, "ctx_modalidade").value == "pregao_poc"
     assert at.number_input(key="ctx_prazo").value == 24
     assert _prob_boxes(at) == before
-    assert at.metric[0].value == suggested_before
+    assert at.metric[0].value == pairs_total_before
     assert _box(at, "ctx_criticidade").format_func("alta") == "High"
 
     at.radio(key="lang").set_value("pt")
@@ -73,7 +77,7 @@ def test_switching_language_keeps_inputs_and_review_edits():
     assert _box(at, "ctx_criticidade").value == "alta"
     assert _box(at, "ctx_criticidade").format_func("alta") == "Alta"
     assert _prob_boxes(at) == before
-    assert at.metric[0].value == suggested_before
+    assert at.metric[0].value == pairs_total_before
 
 
 def test_library_texts_follow_language_until_edited():
@@ -90,11 +94,26 @@ def test_library_texts_follow_language_until_edited():
     assert not at.exception, at.exception
     assert at.text_input(key=edited_key).value == "Texto revisado pelo usuário"
     assert at.text_input(key=untouched_key).value != untouched_pt
-    table = at.dataframe[0].value
-    assert "Risk" in table.columns
 
     at.radio(key="lang").set_value("pt")
     at.run()
 
     assert at.text_input(key=untouched_key).value == untouched_pt
     assert at.text_input(key=edited_key).value == "Texto revisado pelo usuário"
+
+
+def test_blind_suggestions_use_neutral_slot_ids_not_library_ids():
+    at = _run()
+
+    pairing_result = at.session_state["pairing_result"]
+    assert pairing_result.pairs
+    for pair in pairing_result.pairs:
+        for suggestion in pair.suggestions:
+            assert suggestion.slot_id.startswith("S")
+            if suggestion.origin == "ia":
+                assert suggestion.row.id == ""
+            assert not suggestion.row.justificativa
+
+    risco_keys = [box.key for box in at.text_input if box.key and box.key.startswith("risco_")]
+    assert risco_keys
+    assert all(key.split("@")[0].split("risco_", 1)[1].startswith("S") for key in risco_keys)
