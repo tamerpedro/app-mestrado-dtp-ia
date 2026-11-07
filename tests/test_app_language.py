@@ -34,6 +34,16 @@ def _generate(at: AppTest) -> AppTest:
     return at
 
 
+def _choose_items(at: AppTest, count: int = 2) -> AppTest:
+    """Marca os primeiros itens da aba Sugestoes, para aparecerem editaveis
+    na aba Revisao (onde a edicao de fato acontece desde a Parte 2)."""
+    for checkbox in _inclusion_checkboxes(at)[:count]:
+        checkbox.set_value(True)
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
 def test_suggestions_are_not_generated_on_initial_load():
     at = _run()
 
@@ -66,12 +76,11 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
     at.number_input(key="ctx_prazo").set_value(24)
     at.button(key="btn_generate_suggestions").click()
     at.run()
-
     assert not at.exception, at.exception
+
+    _choose_items(at, count=1)
     first_prob = sorted(_prob_boxes(at))[0]
     _box(at, first_prob).select(5)
-    at.run()
-    _inclusion_checkboxes(at)[0].set_value(True)
     at.run()
     before = _prob_boxes(at)
     items_total_before = at.metric[0].value
@@ -100,7 +109,7 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
 
 
 def test_library_texts_follow_language_until_edited():
-    at = _generate(_run())
+    at = _choose_items(_generate(_run()))
     risk_inputs = sorted(box.key for box in at.text_input if box.key and box.key.startswith("risco_"))
     edited_key, untouched_key = risk_inputs[0], risk_inputs[1]
     at.text_input(key=edited_key).input("Texto revisado pelo usuário")
@@ -122,7 +131,8 @@ def test_library_texts_follow_language_until_edited():
 
 
 def test_blind_suggestions_use_neutral_slot_ids_not_catalog_ids():
-    at = _generate(_run())
+    at = _run()
+    at = _generate(at)
 
     mix_result = at.session_state["mix_result"]
     assert mix_result.categories
@@ -133,6 +143,7 @@ def test_blind_suggestions_use_neutral_slot_ids_not_catalog_ids():
                 assert item.row.id == ""
             assert not item.row.justificativa
 
+    at = _choose_items(at)
     risco_keys = [box.key for box in at.text_input if box.key and box.key.startswith("risco_")]
     assert risco_keys
     assert all(key.split("@")[0].split("risco_", 1)[1].startswith("S") for key in risco_keys)

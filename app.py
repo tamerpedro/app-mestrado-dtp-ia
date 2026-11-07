@@ -37,6 +37,7 @@ from src.domain import (
     risk_level_label,
     strategy_label,
 )
+from src.eval_log import edit_ratio
 from src.eval_mode import is_modo_avaliacao
 from src.i18n import DEFAULT_LANGUAGE, LANGUAGES, normalize_language, t
 from src.exporters import EXPORT_FIELDS, row_to_export_dict, selected_rows, to_csv, to_latex
@@ -94,15 +95,24 @@ def library_text(widget, label: str, default: str, *, key: str) -> str:
     """Campo de texto preenchido pela biblioteca de riscos.
 
     Enquanto o usuario nao editar, o texto acompanha o idioma (o ``default``
-    muda com ele). Depois de editado, o texto do usuario e mantido.
+    muda com ele). Depois de editado, o texto do usuario e mantido - mesmo
+    se o item sumir e voltar a aparecer entre rodadas (ex.: desmarcar e
+    marcar de novo na Revisao). O Streamlit limpa o estado de um widget que
+    nao e desenhado numa rodada; por isso guardamos uma copia "sticky" fora
+    do ciclo de vida do widget, para restaurar quando ele reaparecer.
     """
+    sticky = st.session_state.setdefault("_sticky_text", {})
+    if key not in st.session_state and key in sticky:
+        st.session_state[key] = sticky[key]
     seed_key = f"{key}__seed"
     seed = st.session_state.get(seed_key)
     untouched = key in st.session_state and st.session_state[key] == seed
     if key not in st.session_state or (untouched and default != seed):
         st.session_state[key] = default
     st.session_state[seed_key] = default
-    return widget(label, key=key)
+    value = widget(label, key=key)
+    sticky[key] = value
+    return value
 
 
 st.set_page_config(page_title=tr("app.title"), layout="wide")
@@ -392,11 +402,18 @@ apply_dataprev_theme()
 
 
 def _clear_blind_widget_state() -> None:
-    """Limpa os widgets de S01..S99 para que uma nova rodada de pares (apos
-    mudar o contexto) nao herde textos editados de uma rodada anterior."""
+    """Limpa os widgets de S01..S99 (e a copia "sticky" deles, usada por
+    ``library_text`` para sobreviver a desmarcar/marcar de novo) para que uma
+    nova rodada de itens (apos mudar o contexto) nao herde textos editados de
+    uma rodada anterior."""
     for state_key in list(st.session_state.keys()):
         if _SLOT_ID_RE.search(state_key):
             del st.session_state[state_key]
+    sticky = st.session_state.get("_sticky_text")
+    if sticky:
+        for sticky_key in list(sticky.keys()):
+            if _SLOT_ID_RE.search(sticky_key):
+                del sticky[sticky_key]
 
 
 def maybe_generate_mix(
@@ -433,6 +450,10 @@ def maybe_generate_mix(
         st.session_state.mix_result = result
         st.session_state.mix_failures = failures
     return st.session_state.get("mix_result"), st.session_state.get("mix_failures", [])
+
+
+def row_text_blob(row: MatrixRow) -> str:
+    return "||".join([row.risco, row.causa, row.consequencia, row.acao_preventiva, row.acao_contingencia])
 
 
 def render_language_selector() -> None:
@@ -627,7 +648,6 @@ def add_manual_risk_form() -> None:
         with st.form("manual_risk_form", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
             with col1:
-                manual_id = st.text_input(tr("field.id"), value=next_manual_id())
                 categoria = select(
                     tr("field.category"), CATEGORIES, format_func=label_in(category_label), key="manual_categoria"
                 )
@@ -656,9 +676,10 @@ def add_manual_risk_form() -> None:
             submitted = st.form_submit_button(tr("manual.submit"))
 
         if submitted and risco.strip():
+            manual_id = next_manual_id()
             st.session_state.manual_rows.append(
                 MatrixRow(
-                    id=manual_id.strip() or next_manual_id(),
+                    id=manual_id,
                     risco=risco.strip(),
                     categoria=categoria,
                     causa=causa.strip(),
@@ -741,9 +762,10 @@ def edit_action_items(risk_key: str, slot: str, base_actions: list[ActionItem]) 
                 key=f"{risk_key}_{slot}_sit_{index}",
             )
         with col3:
-            responsavel = st.text_input(
+            responsavel = library_text(
+                st.text_input,
                 tr("field.owner"),
-                value=base.responsavel,
+                base.responsavel,
                 key=f"{risk_key}_{slot}_resp_{index}",
             )
         with col4:
@@ -758,13 +780,19 @@ def edit_action_items(risk_key: str, slot: str, base_actions: list[ActionItem]) 
 
 
 def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow]:
-    """Edicao dos riscos manuais (inclusao continua igual; nada aqui e as cegas)."""
+    """Edicao dos riscos escolhidos na Revisao (itens as cegas + manuais).
+
+    A chave de cada widget e ``row.id`` (ja unico: slot_id para itens as
+    cegas, MANxxx para manuais) - nao a posicao na lista, que muda sempre
+    que um item e marcado/desmarcado na aba Sugestoes. Usar a posicao faria
+    o Streamlit "esquecer" as edicoes dos outros itens a cada mudanca.
+    """
     edited_by_index: dict[int, MatrixRow] = {}
     for category, indexed_rows in grouped_row_indexes(rows):
         render_section_label(f"{category_label(category, LANG)} ({len(indexed_rows)})")
         with st.container():
             for index, row in indexed_rows:
-                risk_key = f"{row.id}_{index}"
+                risk_key = row.id
                 with st.expander(f"{row.id} - {row.risco}", expanded=row.selecionado):
                     selecionado = st.checkbox(tr("review.include"), value=row.selecionado, key=f"sel_{risk_key}")
                     col1, col2, col3 = st.columns(3)
@@ -861,15 +889,39 @@ def grouped_row_indexes(rows: list[MatrixRow]) -> list[tuple[str, list[tuple[int
     return sorted(grouped.items(), key=sort_key)
 
 
+def _blind_item_defaults(item, risks_by_id: dict[str, object]) -> dict:
+    """Texto do item no idioma atual: para itens de catalogo, consulta o
+    RiskItem original (acompanha o idioma); para IA, fica congelado no
+    idioma em que foi gerado."""
+    row = item.row
+    source_risk = risks_by_id.get(row.id) if item.origin == ORIGIN_CATALOG else None
+    if source_risk is not None:
+        return {
+            "risco": source_risk.text("titulo", LANG),
+            "causa": source_risk.text("causa", LANG),
+            "consequencias": [source_risk.text("consequencia", LANG)],
+            "preventivas": [ActionItem(source_risk.text("acao_preventiva", LANG))],
+            "contingencias": [ActionItem(source_risk.text("acao_contingencia", LANG))],
+        }
+    return {
+        "risco": row.risco,
+        "causa": row.causa,
+        "consequencias": row.consequencias,
+        "preventivas": row.acoes_preventivas,
+        "contingencias": row.acoes_contingencia,
+    }
+
+
 def render_blind_category(
-    category: CategoryItems, decisions: dict[str, dict], risks_by_id: dict[str, object], ai_failed: bool
+    category: CategoryItems, items_by_slot: dict[str, dict], risks_by_id: dict[str, object], ai_failed: bool
 ) -> None:
-    """Renderiza a lista cega (catalogo+IA misturados) de uma categoria e
-    preenche ``decisions[slot_id]`` com a decisao do usuario para cada item.
+    """Renderiza a lista cega (catalogo+IA misturados) de uma categoria, so
+    para escolher - nada aqui e editavel (a edicao fica na aba Revisao).
 
     O ID neutro, o titulo e a caixa "incluir" ficam visiveis sem precisar
-    expandir; os detalhes (causa, consequencia, P×I, acoes, edicao) ficam
-    no expander.
+    expandir; o expander mostra causa, consequencia, P×I e acoes so para
+    leitura. Preenche ``items_by_slot[slot_id]`` com a decisao e os dados
+    (linha-base, idioma atual) que a aba Revisao vai editar.
     """
     render_section_label(category_label(category.categoria, LANG))
     if ai_failed:
@@ -878,21 +930,7 @@ def render_blind_category(
     for item in category.items:
         slot_key = item.slot_id
         row = item.row
-        # Item de catalogo: o texto acompanha o idioma atual (consulta o
-        # RiskItem original); item de IA fica congelado no idioma gerado.
-        source_risk = risks_by_id.get(row.id) if item.origin == ORIGIN_CATALOG else None
-        if source_risk is not None:
-            default_risco = source_risk.text("titulo", LANG)
-            default_causa = source_risk.text("causa", LANG)
-            default_consequencias = [source_risk.text("consequencia", LANG)]
-            default_preventivas = [ActionItem(source_risk.text("acao_preventiva", LANG))]
-            default_contingencias = [ActionItem(source_risk.text("acao_contingencia", LANG))]
-        else:
-            default_risco = row.risco
-            default_causa = row.causa
-            default_consequencias = row.consequencias
-            default_preventivas = row.acoes_preventivas
-            default_contingencias = row.acoes_contingencia
+        defaults = _blind_item_defaults(item, risks_by_id)
 
         col_check, col_title = st.columns([1, 11])
         with col_check:
@@ -900,61 +938,42 @@ def render_blind_category(
                 tr("review.include"), value=False, key=f"incl_{slot_key}", label_visibility="collapsed"
             )
         with col_title:
-            st.markdown(f"**{slot_key}** - {escape(default_risco)}")
+            st.markdown(f"**{slot_key}** - {escape(defaults['risco'])}")
 
         with st.expander(tr("item.details"), expanded=False):
             col1, col2, col3 = st.columns(3)
             with col1:
-                probabilidade = select(
-                    tr("field.probability"),
-                    PROBABILITY_OPTIONS,
-                    index=PROBABILITY_OPTIONS.index(canonical_scale(row.probabilidade)),
-                    format_func=label_in(probability_label),
-                    key=f"prob_{slot_key}",
-                )
+                st.metric(tr("field.probability"), probability_label(canonical_scale(row.probabilidade), LANG))
             with col2:
-                impacto = select(
-                    tr("field.impact"),
-                    IMPACT_OPTIONS,
-                    index=IMPACT_OPTIONS.index(canonical_scale(row.impacto)),
-                    format_func=label_in(impact_label),
-                    key=f"impacto_{slot_key}",
-                )
+                st.metric(tr("field.impact"), impact_label(canonical_scale(row.impacto), LANG))
             with col3:
-                nivel = risk_level(probabilidade, impacto)
+                nivel = risk_level(row.probabilidade, row.impacto)
                 st.metric(tr("field.level"), risk_level_label(nivel, LANG))
 
-            risco = library_text(st.text_input, tr("field.risk"), default_risco, key=f"risco_{slot_key}")
-            causa = library_text(st.text_area, tr("field.cause"), default_causa, key=f"causa_{slot_key}")
-            render_section_label(tr("section.consequences"))
-            consequencias = edit_text_items(slot_key, "consequence", default_consequencias)
-            render_section_label(tr("section.preventive"))
-            preventivas = edit_action_items(slot_key, "preventive", default_preventivas)
-            render_section_label(tr("section.contingency"))
-            contingencias = edit_action_items(slot_key, "contingency", default_contingencias)
+            st.markdown(f"**{escape(tr('field.cause'))}:** {escape(defaults['causa'])}")
+            consequencia_items = [text for text in defaults["consequencias"] if text]
+            if consequencia_items:
+                st.markdown(f"**{escape(tr('section.consequences'))}:**")
+                for text in consequencia_items:
+                    st.markdown(f"- {escape(text)}")
+            preventiva_items = [action.descricao for action in defaults["preventivas"] if action.descricao]
+            if preventiva_items:
+                st.markdown(f"**{escape(tr('section.preventive'))}:**")
+                for text in preventiva_items:
+                    st.markdown(f"- {escape(text)}")
+            contingencia_items = [action.descricao for action in defaults["contingencias"] if action.descricao]
+            if contingencia_items:
+                st.markdown(f"**{escape(tr('section.contingency'))}:**")
+                for text in contingencia_items:
+                    st.markdown(f"- {escape(text)}")
 
-            edited_row = MatrixRow(
-                id=slot_key,
-                risco=risco,
-                categoria=category.categoria,
-                causa=causa,
-                consequencias=consequencias,
-                probabilidade=probabilidade,
-                impacto=impacto,
-                nivel=nivel,
-                estrategia=row.estrategia,
-                acoes_preventivas=preventivas,
-                acoes_contingencia=contingencias,
-                selecionado=incluido,
-                tags=row.tags,
-            )
-            decisions[slot_key] = {
-                "row": edited_row,
-                "origin": item.origin,
-                "categoria": category.categoria,
-                "posicao": item.posicao,
-                "incluido": incluido,
-            }
+        items_by_slot[slot_key] = {
+            "row": row,
+            "origin": item.origin,
+            "categoria": category.categoria,
+            "defaults": defaults,
+            "incluido": incluido,
+        }
 
 
 context, generate_clicked, selected_case_path = build_context()
@@ -984,7 +1003,7 @@ if ai_config_error:
 
 tab1, tab2, tab3 = st.tabs([tr("tab.suggestions"), tr("tab.review"), tr("tab.export")])
 
-mix_decisions: dict[str, dict] = {}
+items_by_slot: dict[str, dict] = {}
 
 with tab1:
     render_panel_title(tr("panel.suggested"))
@@ -1000,19 +1019,58 @@ with tab1:
         else:
             for category in categories:
                 render_blind_category(
-                    category, mix_decisions, risks_by_id, category.categoria in categories_with_ai_failure
+                    category, items_by_slot, risks_by_id, category.categoria in categories_with_ai_failure
                 )
 
 with tab2:
     render_panel_title(tr("panel.review"))
+    ensure_manual_rows()
+
+    chosen_slots = [slot for slot, info in items_by_slot.items() if info["incluido"]]
+    manual_rows = st.session_state.manual_rows
+
+    baseline_rows: list[MatrixRow] = []
+    edited_rows: list[MatrixRow] = []
+
+    if not chosen_slots and not manual_rows:
+        st.info(tr("empty.review"))
+    else:
+        for slot in chosen_slots:
+            info = items_by_slot[slot]
+            defaults = info["defaults"]
+            source_row = info["row"]
+            baseline_rows.append(
+                MatrixRow(
+                    id=slot,
+                    risco=defaults["risco"],
+                    categoria=info["categoria"],
+                    causa=defaults["causa"],
+                    consequencias=defaults["consequencias"],
+                    probabilidade=source_row.probabilidade,
+                    impacto=source_row.impacto,
+                    nivel=source_row.nivel,
+                    estrategia=source_row.estrategia,
+                    acoes_preventivas=defaults["preventivas"],
+                    acoes_contingencia=defaults["contingencias"],
+                    tags=source_row.tags,
+                )
+            )
+        edited_rows = edit_rows(baseline_rows + manual_rows, context)
+
+        # Medida de edicao: so para os itens escolhidos (nao para manuais), comparando
+        # com a linha-base no idioma atual - trocar de idioma sozinho nao conta como edicao.
+        review_decisions: dict[str, dict] = {}
+        for baseline, edited in zip(baseline_rows, edited_rows[: len(baseline_rows)]):
+            ratio = edit_ratio(row_text_blob(baseline), row_text_blob(edited))
+            review_decisions[baseline.id] = {"editado": ratio > 0.0, "proporcao_edicao": ratio}
+        st.session_state.review_decisions = review_decisions
+
     add_manual_risk_form()
-    edited_manual_rows = edit_rows(st.session_state.manual_rows, context)
 
 with tab3:
     render_panel_title(tr("panel.final"))
 
-    all_rows_for_export = [decision["row"] for decision in mix_decisions.values()] + edited_manual_rows
-    selected = selected_rows(all_rows_for_export)
+    selected = selected_rows(edited_rows)
 
     st.caption(tr("export.final_pending"))
 
