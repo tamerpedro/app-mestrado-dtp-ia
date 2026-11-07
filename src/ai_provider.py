@@ -71,17 +71,23 @@ class AnthropicProvider(AIProvider):
         self.max_tokens = max_tokens
 
     def generate(self, prompt: str) -> str:
+        import inspect
+
         import anthropic  # import tardio: so exigido em uso real, nao nos testes
 
         client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout)
+        kwargs: dict = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        # SDKs/APIs mais recentes da Anthropic removeram "temperature" (a API
+        # chega a rejeitar o campo); so manda quando o metodo instalado aceita.
+        if "temperature" in inspect.signature(client.messages.create).parameters:
+            kwargs["temperature"] = TEMPERATURE
 
         def call() -> str:
-            response = client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                temperature=TEMPERATURE,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            response = client.messages.create(**kwargs)
             return "".join(block.text for block in response.content if block.type == "text")
 
         return _call_with_retry(call, self.max_retries)

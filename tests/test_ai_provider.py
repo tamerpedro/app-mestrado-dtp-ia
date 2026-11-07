@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from src.ai_provider import (
@@ -135,3 +137,52 @@ def test_build_provider_raises_for_unknown_provider():
 
     with pytest.raises(AIProviderError):
         build_provider(config)
+
+
+def _fake_anthropic_message(text: str = "ok") -> SimpleNamespace:
+    return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
+
+
+def test_anthropic_provider_omits_temperature_when_sdk_does_not_accept_it(monkeypatch):
+    """Algumas versoes recentes do SDK/API da Anthropic removeram
+    ``temperature`` de messages.create(); o provider deve detectar isso pela
+    assinatura instalada em vez de sempre mandar o campo."""
+    import anthropic as anthropic_module
+
+    captured: dict = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_anthropic_message()
+
+    fake_messages = SimpleNamespace(create=fake_create)
+    monkeypatch.setattr(
+        anthropic_module, "Anthropic", lambda **kwargs: SimpleNamespace(messages=fake_messages)
+    )
+
+    provider = AnthropicProvider(api_key="k", model="m")
+    result = provider.generate("prompt")
+
+    assert result == "ok"
+    assert "temperature" not in captured
+    assert captured["model"] == "m"
+
+
+def test_anthropic_provider_includes_temperature_when_sdk_accepts_it(monkeypatch):
+    import anthropic as anthropic_module
+
+    captured: dict = {}
+
+    def fake_create(*, model, max_tokens, messages, temperature=None):
+        captured["temperature"] = temperature
+        return _fake_anthropic_message()
+
+    fake_messages = SimpleNamespace(create=fake_create)
+    monkeypatch.setattr(
+        anthropic_module, "Anthropic", lambda **kwargs: SimpleNamespace(messages=fake_messages)
+    )
+
+    provider = AnthropicProvider(api_key="k", model="m")
+    provider.generate("prompt")
+
+    assert captured["temperature"] == 0.0
