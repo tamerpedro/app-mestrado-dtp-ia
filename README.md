@@ -62,7 +62,7 @@ Para adicionar ou alterar um texto da interface, edite a mesma chave em `locales
 
 ## Avaliação cega com IA
 
-Segundo ciclo de avaliação do estudo (Design Science Research): em cada categoria, a interface mostra 1 sugestão da biblioteca e 1 gerada por IA lado a lado, sem indicar qual é qual (IDs neutros `S01`, `S02`...). Ao gerar a matriz final, o app revela a origem de cada risco escolhido e coleta uma avaliação curta.
+Segundo ciclo de avaliação do estudo (Design Science Research): em cada categoria com risco na biblioteca, a interface mostra esse risco (o de maior pontuação, mesmo abaixo do corte atual de sugestão) e 1 gerado por IA lado a lado, sem indicar qual é qual (IDs neutros `S01`, `S02`...). `sem_par` só ocorre quando a categoria não tem nenhum risco na biblioteca. Ao gerar a matriz final, o app revela a origem de cada risco escolhido e coleta uma avaliação curta.
 
 ### Configurar a chave de IA
 
@@ -93,7 +93,7 @@ Sem chave configurada (ou se a chamada falhar), o app mostra um aviso e segue a 
 streamlit run app.py
 ```
 
-Na barra lateral, informe um **código do processo** (texto livre, sem dados pessoais) antes de avaliar. Na aba "Sugestões", cada par aparece com IDs neutros e as duas sugestões começam desmarcadas; ao descartar uma, é possível informar um motivo (opcional). Na aba "Exportação", a origem de cada risco escolhido é revelada, com as contagens por origem e desfecho, e ficam disponíveis as 3 perguntas finais (escala 1-5) e um comentário opcional; "Salvar avaliação" grava o log do processo em `data/avaliacao/<código>_<timestamp>.json`.
+Na barra lateral, informe um **código do processo** (texto livre, sem dados pessoais), preencha os dados da contratação e clique em **"Gerar sugestões"** — só então a IA é chamada; abrir a tela ou editar um campo não gera nada sozinho. Clicar de novo refaz o pareamento (nova chamada à IA e novo sorteio de ordem) a partir dos dados atuais. Na aba "Sugestões", cada par aparece com IDs neutros e as duas sugestões começam desmarcadas; ao descartar uma, é possível informar um motivo (opcional). Na aba "Exportação", a origem de cada risco escolhido é revelada, com as contagens por origem e desfecho, e ficam disponíveis as 3 perguntas finais (escala 1-5) e um comentário opcional; "Salvar avaliação" grava o log do processo em `data/avaliacao/<código>_<timestamp>.json`.
 
 Durante a avaliação (`MODO_AVALIACAO`, ligado por padrão nesta branch), nada é gravado em `data/riscos_base.csv`: riscos de IA escolhidos vão para `data/candidatos_ia.csv`, e o botão de salvar manualmente na biblioteca (revisão humana) fica desativado. Para desligar (voltando a gravar direto na biblioteca), defina `MODO_AVALIACAO=false` por variável de ambiente ou em `secrets.toml`.
 
@@ -103,7 +103,7 @@ Durante a avaliação (`MODO_AVALIACAO`, ligado por padrão nesta branch), nada 
 python scripts/consolidar_avaliacao.py
 ```
 
-Lê todos os JSON em `data/avaliacao/`, gera `resumo_processos.csv` (uma linha por processo) e `resumo_pares.csv` (uma linha por par biblioteca+IA) na raiz do projeto, e imprime no terminal os totais, as taxas por desfecho (`so_biblioteca`, `so_ia`, `ambos`, `nenhum`, `sem_par`) e o teste de McNemar exato entre `so_biblioteca` e `so_ia`. Use `--log-dir` e `--out-dir` para outros caminhos.
+Lê todos os JSON em `data/avaliacao/`, gera `resumo_processos.csv` (uma linha por processo) e `resumo_pares.csv` (uma linha por par biblioteca+IA, com o grupo de corte e a pontuação da sugestão de biblioteca) na raiz do projeto, e imprime no terminal os totais e as taxas por desfecho (`so_biblioteca`, `so_ia`, `ambos`, `nenhum`, `sem_par`) **separados para pares acima do corte, abaixo do corte e `sem_par`**. O teste de McNemar exato entre `so_biblioteca` e `so_ia` usa só os pares acima do corte — abaixo do corte ou sem risco de biblioteca não são uma comparação justa entre as duas origens. Use `--log-dir` e `--out-dir` para outros caminhos.
 
 ## Decisao de Projeto
 
