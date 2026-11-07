@@ -1,5 +1,5 @@
 {
-  "ai.partial_failure": "The AI failed for {count} categories; those suggestions show only the library risk.",
+  "ai.partial_failure": "The AI failed for {count} categories ({detail}); those suggestions show only the library risk.",
   "ai.unavailable": "AI unavailable ({detail}). The evaluation continues with library risks only.",
   "app.kicker": "Dataprev | ICT Procurement",
   "app.logo_alt": "Dataprev logo",

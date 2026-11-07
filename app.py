@@ -965,7 +965,8 @@ render_app_header(context, len(pairing_result.pairs), sem_par_count)
 if ai_config_error:
     st.warning(tr("ai.unavailable", detail=ai_config_error))
 elif pairing_failures:
-    st.warning(tr("ai.partial_failure", count=len(pairing_failures)))
+    first_detail = pairing_failures[0]["erro"]
+    st.warning(tr("ai.partial_failure", count=len(pairing_failures), detail=first_detail))
 
 tab1, tab2, tab3 = st.tabs([tr("tab.suggestions"), tr("tab.review"), tr("tab.export")])
 

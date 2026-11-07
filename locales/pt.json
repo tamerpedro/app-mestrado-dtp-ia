@@ -1,5 +1,5 @@
 {
-  "ai.partial_failure": "A IA falhou para {count} categoria(s); essas sugestões seguem apenas com o risco da biblioteca.",
+  "ai.partial_failure": "A IA falhou para {count} categoria(s) ({detail}); essas sugestões seguem apenas com o risco da biblioteca.",
   "ai.unavailable": "IA indisponível ({detail}). A avaliação segue apenas com os riscos da biblioteca.",
   "app.kicker": "Dataprev | Contratações de TIC",
   "app.logo_alt": "Logotipo Dataprev",
