@@ -41,7 +41,7 @@ def _valid_ai_response() -> str:
     )
 
 
-def test_top_library_risk_per_category_respects_cutoff(monkeypatch):
+def test_top_library_risk_per_category_always_picks_the_top_one_even_below_cutoff(monkeypatch):
     risk_above = _risk("R001", "planejamento")
     risk_below = _risk("R002", "selecao")
     scores = {"R001": 5, "R002": 1}
@@ -49,7 +49,23 @@ def test_top_library_risk_per_category_respects_cutoff(monkeypatch):
 
     chosen = top_library_risk_per_category([risk_above, risk_below], _context(), minimum_score=2)
 
-    assert chosen == {"planejamento": risk_above}
+    assert set(chosen) == {"planejamento", "selecao"}
+    assert chosen["planejamento"].risk is risk_above
+    assert chosen["planejamento"].pontuacao == 5
+    assert chosen["planejamento"].abaixo_corte is False
+    assert chosen["selecao"].risk is risk_below
+    assert chosen["selecao"].pontuacao == 1
+    assert chosen["selecao"].abaixo_corte is True
+
+
+def test_top_library_risk_per_category_picks_highest_score_with_score_zero_included(monkeypatch):
+    risk = _risk("R001", "planejamento")
+    monkeypatch.setattr(pairing_module, "suggestion_score", lambda risk, context: 0)
+
+    chosen = top_library_risk_per_category([risk], _context(), minimum_score=2)
+
+    assert chosen["planejamento"].pontuacao == 0
+    assert chosen["planejamento"].abaixo_corte is True
 
 
 def test_build_category_pairs_creates_pair_with_both_origins(monkeypatch):
@@ -69,8 +85,14 @@ def test_build_category_pairs_creates_pair_with_both_origins(monkeypatch):
     assert all(slot.startswith("S") for slot in slot_ids)
     assert len(set(slot_ids)) == len(slot_ids)
 
+    by_origin = {s.origin: s for s in pair.suggestions}
+    assert by_origin[ORIGIN_LIBRARY].pontuacao == 5
+    assert by_origin[ORIGIN_LIBRARY].abaixo_corte is False
+    assert by_origin[ORIGIN_AI].pontuacao is None
+    assert by_origin[ORIGIN_AI].abaixo_corte is None
 
-def test_build_category_pairs_marks_sem_par_when_no_library_risk_above_cutoff(monkeypatch):
+
+def test_build_category_pairs_still_pairs_when_library_score_is_below_cutoff(monkeypatch):
     risk_low_score = _risk("R002", "selecao")
     monkeypatch.setattr(pairing_module, "suggestion_score", lambda risk, context: 0)
     provider = FakeProvider(_valid_ai_response())
@@ -80,17 +102,39 @@ def test_build_category_pairs_marks_sem_par_when_no_library_risk_above_cutoff(mo
     pairs = {pair.categoria: pair for pair in result.pairs}
     assert "selecao" in pairs
     pair = pairs["selecao"]
+    assert pair.sem_par is False
+    origins = {s.origin for s in pair.suggestions}
+    assert origins == {ORIGIN_LIBRARY, ORIGIN_AI}
+
+    library_suggestion = next(s for s in pair.suggestions if s.origin == ORIGIN_LIBRARY)
+    assert library_suggestion.pontuacao == 0
+    assert library_suggestion.abaixo_corte is True
+
+
+def test_build_category_pairs_is_sem_par_only_when_category_has_no_library_risk_at_all(monkeypatch):
+    # Nenhum risco de categoria "gestao" na biblioteca passada; a IA consegue gerar.
+    risk_other_category = _risk("R001", "planejamento")
+    monkeypatch.setattr(pairing_module, "suggestion_score", lambda risk, context: 5)
+    provider = FakeProvider(_valid_ai_response())
+
+    result = build_category_pairs([risk_other_category], _context(), provider, minimum_score=2, seed=1)
+
+    pairs = {pair.categoria: pair for pair in result.pairs}
+    assert "gestao" in pairs
+    pair = pairs["gestao"]
     assert pair.sem_par is True
     assert len(pair.suggestions) == 1
     assert pair.suggestions[0].origin == ORIGIN_AI
+    assert pair.suggestions[0].pontuacao is None
 
 
 def test_build_category_pairs_skips_category_when_ai_fails_and_no_library_risk(monkeypatch):
+    # "gestao" nao tem nenhum risco na biblioteca; a IA tambem falha -> nada a mostrar.
+    risk_other_category = _risk("R003", "planejamento")
     monkeypatch.setattr(pairing_module, "suggestion_score", lambda risk, context: 0)
     provider = FakeProvider(fail=True)
-    risk = _risk("R003", "gestao")
 
-    result = build_category_pairs([risk], _context(), provider, minimum_score=2, seed=1)
+    result = build_category_pairs([risk_other_category], _context(), provider, minimum_score=2, seed=1)
 
     pairs = {pair.categoria: pair for pair in result.pairs}
     assert "gestao" not in pairs

@@ -52,7 +52,14 @@ def _sample_log(codigo_processo: str = "PROC-001") -> EvaluationLog:
     )
     log.sugestoes.append(
         SuggestionLogEntry(
-            par=1, categoria="planejamento", origem="biblioteca", posicao=1, slot_id="S01", escolhido=True
+            par=1,
+            categoria="planejamento",
+            origem="biblioteca",
+            posicao=1,
+            slot_id="S01",
+            escolhido=True,
+            pontuacao=1,
+            abaixo_corte=True,
         )
     )
     log.sugestoes.append(
@@ -87,6 +94,10 @@ def test_save_evaluation_log_writes_expected_schema(tmp_path):
     ]:
         assert key in data
     assert data["sugestoes"][0]["origem"] == "biblioteca"
+    assert data["sugestoes"][0]["pontuacao"] == 1
+    assert data["sugestoes"][0]["abaixo_corte"] is True
+    assert data["sugestoes"][1]["pontuacao"] is None
+    assert data["sugestoes"][1]["abaixo_corte"] is None
     assert data["pares"][0]["desfecho"] == OUTCOME_LIBRARY_ONLY
     assert data["quantidade_riscos_manuais"] == 1
 

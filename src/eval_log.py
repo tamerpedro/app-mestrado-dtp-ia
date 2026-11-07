@@ -40,6 +40,9 @@ class SuggestionLogEntry:
     editado: bool = False
     proporcao_edicao: float = 0.0
     motivo_descarte: str | None = None
+    # So para origem == "biblioteca" (None para "ia"); nunca exibido na interface.
+    pontuacao: int | None = None
+    abaixo_corte: bool | None = None
 
 
 @dataclass
