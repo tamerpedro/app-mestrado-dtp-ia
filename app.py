@@ -832,20 +832,28 @@ def edit_action_items(risk_key: str, slot: str, base_actions: list[ActionItem]) 
     return actions
 
 
-def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow]:
+def edit_rows(rows: list[MatrixRow], context: ContractContext, generation: int) -> list[MatrixRow]:
     """Edicao dos riscos escolhidos na Revisao (itens as cegas + manuais).
 
     A chave de cada widget e ``row.id`` (ja unico: slot_id para itens as
     cegas, MANxxx para manuais) - nao a posicao na lista, que muda sempre
     que um item e marcado/desmarcado na aba Sugestoes. Usar a posicao faria
     o Streamlit "esquecer" as edicoes dos outros itens a cada mudanca.
+
+    Para itens as cegas, a chave tambem leva ``generation`` (semente do
+    sorteio atual): o mesmo slot_id (ex.: S32) pode apontar para um risco
+    diferente a cada clique em "Gerar sugestoes", e sem isso os campos
+    (Risco, Causa, Categoria no mapa, ...) podiam continuar mostrando o
+    texto - ou a edicao em branco - de um risco antigo que calhou de ocupar
+    esse mesmo slot numa rodada anterior. Linhas manuais (MANxxx) nao mudam
+    entre sorteios, entao mantem a chave estavel.
     """
     edited_by_index: dict[int, MatrixRow] = {}
     for category, indexed_rows in grouped_row_indexes(rows):
         render_section_label(f"{category_label(category, LANG)} ({len(indexed_rows)})")
         with st.container():
             for index, row in indexed_rows:
-                risk_key = row.id
+                risk_key = row.id if "manual" in row.tags else f"{row.id}_{generation}"
                 with st.expander(f"{row.id} - {row.risco}", expanded=row.selecionado):
                     selecionado = st.checkbox(tr("review.include"), value=row.selecionado, key=f"sel_{risk_key}")
                     col1, col2, col3 = st.columns(3)
@@ -966,7 +974,11 @@ def _blind_item_defaults(item, risks_by_id: dict[str, object]) -> dict:
 
 
 def render_blind_category(
-    category: CategoryItems, items_by_slot: dict[str, dict], risks_by_id: dict[str, object], ai_failed: bool
+    category: CategoryItems,
+    items_by_slot: dict[str, dict],
+    risks_by_id: dict[str, object],
+    ai_failed: bool,
+    generation: int,
 ) -> None:
     """Renderiza a lista cega (catalogo+IA misturados) de uma categoria, so
     para escolher - nada aqui e editavel (a edicao fica na aba Revisao).
@@ -975,6 +987,15 @@ def render_blind_category(
     expandir; o expander mostra causa, consequencia, P×I e acoes so para
     leitura. Preenche ``items_by_slot[slot_id]`` com a decisao e os dados
     (linha-base, idioma atual) que a aba Revisao vai editar.
+
+    ``generation`` (semente do sorteio atual) entra na chave do widget
+    "incluir" para que um novo clique em "Gerar sugestoes" nunca reaproveite
+    o estado de selecao de um slot anterior: o mesmo ``slot_id`` (ex.: S32)
+    pode calhar de apontar para um risco diferente a cada sorteio, e o
+    Streamlit mantem o valor de uma chave ja existente mesmo quando o
+    ``value=`` passado muda - sem isso, um item ficaria marcado (ou com
+    texto editado em branco) por causa de uma rodada anterior, sem relacao
+    com o risco atualmente nesse slot.
     """
     render_section_label(category_label(category.categoria, LANG))
     if ai_failed:
@@ -988,7 +1009,10 @@ def render_blind_category(
         col_check, col_title = st.columns([1, 11])
         with col_check:
             incluido = st.checkbox(
-                tr("review.include"), value=False, key=f"incl_{slot_key}", label_visibility="collapsed"
+                tr("review.include"),
+                value=False,
+                key=f"incl_{slot_key}_{generation}",
+                label_visibility="collapsed",
             )
         with col_title:
             st.markdown(f"**{slot_key}** - {escape(defaults['risco'])}")
@@ -1049,6 +1073,7 @@ except AIProviderError as exc:
 mix_result, mix_failures = maybe_generate_mix(context, risks, provider, LANG, generate_clicked, selected_case_path)
 categories = mix_result.categories if mix_result is not None else []
 categories_with_ai_failure = {failure["categoria"] for failure in mix_failures}
+generation = mix_result.seed if mix_result is not None else 0
 
 render_app_header(context, sum(len(c.items) for c in categories), len(categories))
 
@@ -1073,7 +1098,11 @@ with tab1:
         else:
             for category in categories:
                 render_blind_category(
-                    category, items_by_slot, risks_by_id, category.categoria in categories_with_ai_failure
+                    category,
+                    items_by_slot,
+                    risks_by_id,
+                    category.categoria in categories_with_ai_failure,
+                    generation,
                 )
 
 with tab2:
@@ -1109,7 +1138,7 @@ with tab2:
                     tags=source_row.tags,
                 )
             )
-        edited_rows = edit_rows(baseline_rows + manual_rows, context)
+        edited_rows = edit_rows(baseline_rows + manual_rows, context, generation)
 
         # Medida de edicao: so para os itens escolhidos (nao para manuais), comparando
         # com a linha-base no idioma atual - trocar de idioma sozinho nao conta como edicao.

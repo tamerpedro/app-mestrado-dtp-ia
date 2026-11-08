@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
@@ -21,8 +22,15 @@ def _generate(at: AppTest) -> AppTest:
     return at
 
 
+_INCL_KEY_RE = re.compile(r"^incl_(S\d+)_(\d+)$")
+
+
 def _inclusion_checkboxes(at: AppTest):
     return [checkbox for checkbox in at.checkbox if checkbox.key and checkbox.key.startswith("incl_")]
+
+
+def _generation(at: AppTest) -> int:
+    return at.session_state["mix_result"].seed
 
 
 def _choose_items(at: AppTest, count: int = 1) -> AppTest:
@@ -44,14 +52,15 @@ def _all_slot_ids(at: AppTest) -> set[str]:
 
 def test_unchosen_items_do_not_appear_in_review():
     at = _choose_items(_generate(_run()), count=1)
+    generation = _generation(at)
 
-    chosen_slot = next(cb.key.removeprefix("incl_") for cb in _inclusion_checkboxes(at) if cb.value)
+    chosen_slot = next(_INCL_KEY_RE.match(cb.key).group(1) for cb in _inclusion_checkboxes(at) if cb.value)
     review_keys = _review_risco_keys(at)
 
-    assert f"risco_{chosen_slot}" in review_keys
+    assert f"risco_{chosen_slot}_{generation}" in review_keys
     unchosen_slots = _all_slot_ids(at) - {chosen_slot}
     for slot in unchosen_slots:
-        assert f"risco_{slot}" not in review_keys
+        assert f"risco_{slot}_{generation}" not in review_keys
 
 
 def test_empty_review_shows_message_when_nothing_chosen():
@@ -64,19 +73,20 @@ def test_empty_review_shows_message_when_nothing_chosen():
 
 def test_edits_are_preserved_when_unchecking_and_rechecking():
     at = _choose_items(_generate(_run()), count=1)
-    slot = next(cb.key.removeprefix("incl_") for cb in _inclusion_checkboxes(at) if cb.value)
-    risco_key = f"risco_{slot}"
+    generation = _generation(at)
+    slot = next(_INCL_KEY_RE.match(cb.key).group(1) for cb in _inclusion_checkboxes(at) if cb.value)
+    risco_key = f"risco_{slot}_{generation}"
 
     at.text_input(key=risco_key).input("Texto editado na revisão")
     at.run()
     assert at.text_input(key=risco_key).value == "Texto editado na revisão"
 
-    at.checkbox(key=f"incl_{slot}").set_value(False)
+    at.checkbox(key=f"incl_{slot}_{generation}").set_value(False)
     at.run()
     assert not at.exception, at.exception
     assert risco_key not in _review_risco_keys(at)
 
-    at.checkbox(key=f"incl_{slot}").set_value(True)
+    at.checkbox(key=f"incl_{slot}_{generation}").set_value(True)
     at.run()
     assert not at.exception, at.exception
     assert at.text_input(key=risco_key).value == "Texto editado na revisão"
@@ -84,7 +94,8 @@ def test_edits_are_preserved_when_unchecking_and_rechecking():
 
 def test_edit_is_measured_only_after_a_real_change_and_not_on_language_switch():
     at = _choose_items(_generate(_run()), count=1)
-    slot = next(cb.key.removeprefix("incl_") for cb in _inclusion_checkboxes(at) if cb.value)
+    generation = _generation(at)
+    slot = next(_INCL_KEY_RE.match(cb.key).group(1) for cb in _inclusion_checkboxes(at) if cb.value)
 
     decisions = at.session_state["review_decisions"]
     assert decisions[slot]["editado"] is False
@@ -99,7 +110,7 @@ def test_edit_is_measured_only_after_a_real_change_and_not_on_language_switch():
     at.radio(key="lang").set_value("pt")
     at.run()
 
-    at.text_input(key=f"risco_{slot}").input("Risco totalmente reescrito pelo usuário")
+    at.text_input(key=f"risco_{slot}_{generation}").input("Risco totalmente reescrito pelo usuário")
     at.run()
     assert not at.exception, at.exception
     decisions = at.session_state["review_decisions"]
@@ -130,10 +141,57 @@ def test_review_tab_never_reveals_catalog_or_ai_origin():
 
     review_keys = _review_risco_keys(at)
     assert review_keys
-    # Chaves da Revisao sao sempre slot_id (S01, S02...), nunca o ID real do catalogo (R0xx).
-    assert all(re.match(r"^risco_S\d{2,}$", key) for key in review_keys)
-    assert not any(re.match(r"^risco_R\d{3}$", key) for key in review_keys)
+    # Chaves da Revisao sao sempre slot_id (S01, S02...) + geracao do sorteio, nunca o ID real do catalogo (R0xx).
+    assert all(re.match(r"^risco_S\d{2,}_\d+$", key) for key in review_keys)
+    assert not any(re.match(r"^risco_R\d{3}", key) for key in review_keys)
 
     review_decisions = at.session_state["review_decisions"]
     assert review_decisions
     assert all(re.match(r"^S\d{2,}$", slot) for slot in review_decisions)
+
+
+def _row_for_slot(at: AppTest, slot: str):
+    mix_result = at.session_state["mix_result"]
+    for category in mix_result.categories:
+        for item in category.items:
+            if item.slot_id == slot:
+                return item.row
+    raise AssertionError(slot)
+
+
+def test_regenerating_suggestions_does_not_leak_stale_state_into_a_reused_slot_id():
+    """Bug real reportado pelo usuario: o mesmo slot_id (ex.: S32) pode calhar
+    de apontar para um risco diferente a cada novo clique em "Gerar
+    sugestoes" (o sorteio e aleatorio). Antes da correcao, o Streamlit
+    reaproveitava o estado do widget (texto editado e caixa "incluir") de
+    quem ocupou aquele slot_id na rodada anterior - deixando Risco/Causa em
+    branco (ou com o texto do risco antigo) e a caixa ja marcada, sem o
+    usuario ter feito nada com o risco novo."""
+    at = _choose_items(_generate(_run()), count=1)
+    generation = _generation(at)
+    slot = next(_INCL_KEY_RE.match(cb.key).group(1) for cb in _inclusion_checkboxes(at) if cb.value)
+    risco_key = f"risco_{slot}_{generation}"
+
+    at.text_input(key=risco_key).input("")
+    at.run()
+    assert at.text_input(key=risco_key).value == ""
+
+    original_risco = _row_for_slot(at, slot).risco
+    for _ in range(20):
+        at = _generate(at)
+        new_row = _row_for_slot(at, slot)
+        if new_row.risco != original_risco:
+            break
+    else:
+        pytest.skip("sorteio nao produziu um risco diferente para o mesmo slot em 20 tentativas")
+
+    new_generation = _generation(at)
+    assert new_generation != generation
+
+    new_checkbox = next(cb for cb in _inclusion_checkboxes(at) if cb.key == f"incl_{slot}_{new_generation}")
+    assert new_checkbox.value is False, "caixa nao deveria vir pre-marcada por causa da rodada anterior"
+
+    new_checkbox.set_value(True)
+    at.run()
+    new_risco_key = f"risco_{slot}_{new_generation}"
+    assert at.text_input(key=new_risco_key).value == new_row.risco

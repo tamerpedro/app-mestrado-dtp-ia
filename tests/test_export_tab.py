@@ -1,6 +1,7 @@
 """Aba Exportacao: resultado da avaliacao e exportacao do log (sem gravar em disco)."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -67,8 +68,17 @@ def _generate(at: AppTest) -> AppTest:
     return at
 
 
+_INCL_KEY_RE = re.compile(r"^incl_(S\d+)_\d+$")
+
+
 def _inclusion_checkboxes(at: AppTest):
     return [checkbox for checkbox in at.checkbox if checkbox.key and checkbox.key.startswith("incl_")]
+
+
+def _slot_of_inclusion_checkbox(key: str) -> str:
+    match = _INCL_KEY_RE.match(key)
+    assert match, key
+    return match.group(1)
 
 
 def _slot_origin(at: AppTest) -> dict[str, str]:
@@ -79,8 +89,8 @@ def _slot_origin(at: AppTest) -> dict[str, str]:
 def _choose_one_catalog_and_one_ai_item(at: AppTest) -> AppTest:
     origin = _slot_origin(at)
     checkboxes = _inclusion_checkboxes(at)
-    catalog_box = next(cb for cb in checkboxes if origin.get(cb.key.removeprefix("incl_")) == "catalogo")
-    ai_box = next(cb for cb in checkboxes if origin.get(cb.key.removeprefix("incl_")) == "ia")
+    catalog_box = next(cb for cb in checkboxes if origin.get(_slot_of_inclusion_checkbox(cb.key)) == "catalogo")
+    ai_box = next(cb for cb in checkboxes if origin.get(_slot_of_inclusion_checkbox(cb.key)) == "ia")
     catalog_box.set_value(True)
     ai_box.set_value(True)
     at.run()
