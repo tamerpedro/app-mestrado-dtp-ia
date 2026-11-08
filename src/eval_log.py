@@ -20,6 +20,7 @@ import difflib
 import json
 import re
 import uuid
+from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,7 +41,7 @@ class SuggestionLogEntry:
     """Um item mostrado na aba Sugestoes (catalogo ou IA)."""
 
     slot_id: str
-    categoria: str
+    categoria: str  # categoria em que o item foi mostrado (original, nunca muda)
     origem: str  # ORIGIN_CATALOG | ORIGIN_AI - nunca exibido na interface
     id_catalogo: str | None  # so para origem == ORIGIN_CATALOG
     posicao: int  # posicao sorteada dentro da categoria (1, 2, ...)
@@ -49,6 +50,9 @@ class SuggestionLogEntry:
     proporcao_edicao: float = 0.0
     texto_mostrado: dict = field(default_factory=dict)
     texto_final: dict | None = None  # so quando editado
+    incluido_matriz: bool = False  # escolhido E com "Incluir na matriz" marcado na Revisao
+    categoria_final: str | None = None  # "Categoria no mapa" na Revisao; None se nao entrou na matriz
+    categoria_alterada: bool = False  # so avaliado quando incluido_matriz (categoria_final != categoria)
 
 
 @dataclass
@@ -56,9 +60,11 @@ class ManualRiskLogEntry:
     """Um risco incluido manualmente na revisao."""
 
     id: str
-    categoria: str
-    escolhido: bool
+    categoria: str  # categoria escolhida ao criar o risco manual (original, nunca muda)
+    escolhido: bool  # equivale a "Incluir na matriz" marcado na Revisao
     texto: dict = field(default_factory=dict)
+    categoria_final: str | None = None  # "Categoria no mapa" na Revisao; None se nao entrou na matriz
+    categoria_alterada: bool = False  # so avaliado quando escolhido (categoria_final != categoria)
 
 
 @dataclass
@@ -245,21 +251,27 @@ def build_evaluation_log(
             "preventivas": [action.descricao for action in defaults["preventivas"] if action.descricao],
             "contingencias": [action.descricao for action in defaults["contingencias"] if action.descricao],
         }
+        edited_row = edited_by_id.get(slot)
         texto_final = None
-        if decision.get("editado"):
-            edited_row = edited_by_id.get(slot)
-            if edited_row is not None:
-                texto_final = {
-                    "risco": edited_row.risco,
-                    "causa": edited_row.causa,
-                    "consequencias": [text for text in edited_row.consequencias if text],
-                    "preventivas": [
-                        action.descricao for action in edited_row.acoes_preventivas if action.descricao
-                    ],
-                    "contingencias": [
-                        action.descricao for action in edited_row.acoes_contingencia if action.descricao
-                    ],
-                }
+        if decision.get("editado") and edited_row is not None:
+            texto_final = {
+                "risco": edited_row.risco,
+                "causa": edited_row.causa,
+                "consequencias": [text for text in edited_row.consequencias if text],
+                "preventivas": [
+                    action.descricao for action in edited_row.acoes_preventivas if action.descricao
+                ],
+                "contingencias": [
+                    action.descricao for action in edited_row.acoes_contingencia if action.descricao
+                ],
+            }
+        # incluido_matriz: so existe edited_row quando o slot foi escolhido na
+        # aba Sugestoes (so esses entram em baseline_rows/edit_rows); dentre
+        # esses, o que define se ficou na matriz final e o checkbox "Incluir
+        # na matriz" (selecionado) da Revisao - nao a escolha original.
+        incluido_matriz = bool(edited_row.selecionado) if edited_row is not None else False
+        categoria_final = edited_row.categoria if incluido_matriz and edited_row is not None else None
+        categoria_alterada = incluido_matriz and categoria_final != info["categoria"]
         log.sugestoes.append(
             SuggestionLogEntry(
                 slot_id=slot,
@@ -272,17 +284,22 @@ def build_evaluation_log(
                 proporcao_edicao=decision.get("proporcao_edicao", 0.0),
                 texto_mostrado=texto_mostrado,
                 texto_final=texto_final,
+                incluido_matriz=incluido_matriz,
+                categoria_final=categoria_final,
+                categoria_alterada=categoria_alterada,
             )
         )
 
     selected_ids = {row.id for row in selected_rows}
     for manual_row in manual_rows:
         edited_manual = edited_by_id.get(manual_row.id, manual_row)
+        escolhido = manual_row.id in selected_ids
+        categoria_final_manual = edited_manual.categoria if escolhido else None
         log.riscos_manuais.append(
             ManualRiskLogEntry(
                 id=manual_row.id,
-                categoria=edited_manual.categoria,
-                escolhido=manual_row.id in selected_ids,
+                categoria=manual_row.categoria,
+                escolhido=escolhido,
                 texto={
                     "risco": edited_manual.risco,
                     "causa": edited_manual.causa,
@@ -294,6 +311,8 @@ def build_evaluation_log(
                         action.descricao for action in edited_manual.acoes_contingencia if action.descricao
                     ],
                 },
+                categoria_final=categoria_final_manual,
+                categoria_alterada=escolhido and categoria_final_manual != manual_row.categoria,
             )
         )
 
@@ -327,3 +346,63 @@ def save_evaluation_log(
     path = directory / f"{safe_filename(log.codigo_processo)}_{suffix}.json"
     path.write_text(json.dumps(log.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def log_consistency_errors(log: dict) -> list[str]:
+    """Confere se os campos por item de um log v2 (``incluido_matriz``,
+    ``categoria_final``) batem com os totais agregados em ``log["totais"]``.
+
+    Recebe o log como ``dict`` (``EvaluationLog.to_dict()`` ou um JSON lido
+    do disco) para servir tanto aos testes quanto a scripts de consolidacao.
+    Devolve uma lista de descricoes dos problemas encontrados; vazia quando
+    o log e consistente.
+    """
+    totais = log.get("totais") or {}
+    sugestoes = log.get("sugestoes") or []
+    riscos_manuais = log.get("riscos_manuais") or []
+    errors: list[str] = []
+
+    def escolhidos_por_origem(origem: str) -> int:
+        return sum(1 for item in sugestoes if item.get("origem") == origem and item.get("incluido_matriz"))
+
+    escolhidos_catalogo = escolhidos_por_origem(ORIGIN_CATALOG)
+    escolhidos_ia = escolhidos_por_origem(ORIGIN_AI)
+    escolhidos_manual = sum(1 for item in riscos_manuais if item.get("escolhido"))
+
+    for label, computed, key in [
+        ("escolhidos_catalogo", escolhidos_catalogo, "escolhidos_catalogo"),
+        ("escolhidos_ia", escolhidos_ia, "escolhidos_ia"),
+        ("escolhidos_manual", escolhidos_manual, "escolhidos_manual"),
+    ]:
+        expected = totais.get(key, 0)
+        if computed != expected:
+            errors.append(f"{label}: soma de incluido_matriz/escolhido={computed} != totais.{key}={expected}")
+
+    tamanho_matriz_final = totais.get("tamanho_matriz_final", 0)
+    soma_origens = (totais.get("escolhidos_catalogo", 0) + totais.get("escolhidos_ia", 0) + totais.get("escolhidos_manual", 0))
+    if tamanho_matriz_final != soma_origens:
+        errors.append(
+            f"tamanho_matriz_final={tamanho_matriz_final} != "
+            f"escolhidos_catalogo + escolhidos_ia + escolhidos_manual={soma_origens}"
+        )
+
+    contagem_por_categoria_origem: dict[tuple[str | None, str], int] = defaultdict(int)
+    for item in sugestoes:
+        if item.get("incluido_matriz"):
+            contagem_por_categoria_origem[(item.get("categoria_final"), item.get("origem"))] += 1
+    for item in riscos_manuais:
+        if item.get("escolhido"):
+            contagem_por_categoria_origem[(item.get("categoria_final"), ORIGIN_MANUAL)] += 1
+
+    origem_to_key = {ORIGIN_CATALOG: "escolhidos_catalogo", ORIGIN_AI: "escolhidos_ia", ORIGIN_MANUAL: "escolhidos_manual"}
+    for categoria_totais in totais.get("por_categoria", []):
+        categoria = categoria_totais.get("categoria")
+        for origem, key in origem_to_key.items():
+            expected = categoria_totais.get(key, 0)
+            actual = contagem_por_categoria_origem.get((categoria, origem), 0)
+            if expected != actual:
+                errors.append(
+                    f"por_categoria[{categoria}].{key}: contagem por categoria_final={actual} != totais={expected}"
+                )
+
+    return errors

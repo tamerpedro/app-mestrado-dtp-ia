@@ -9,6 +9,7 @@ from src.eval_log import (
     build_evaluation_log,
     compute_totals,
     edit_ratio,
+    log_consistency_errors,
     save_evaluation_log,
 )
 from src.models import ActionItem, MatrixRow
@@ -357,6 +358,10 @@ def test_build_evaluation_log_assembles_schema_v2_from_app_state():
     assert s01.editado is True
     assert s01.texto_mostrado["risco"] == "Risco original"
     assert s01.texto_final["risco"] == "Risco editado"
+    # edited_rows traz S01 com o selecionado=True default do MatrixRow, e sem mudar de categoria.
+    assert s01.incluido_matriz is True
+    assert s01.categoria_final == "planejamento"
+    assert s01.categoria_alterada is False
 
     s02 = next(s for s in log.sugestoes if s.slot_id == "S02")
     assert s02.origem == ORIGIN_AI
@@ -364,16 +369,24 @@ def test_build_evaluation_log_assembles_schema_v2_from_app_state():
     assert s02.escolhido is False
     assert s02.editado is False
     assert s02.texto_final is None
+    # S02 nunca foi escolhido na aba Sugestoes, entao nem chega a Revisao.
+    assert s02.incluido_matriz is False
+    assert s02.categoria_final is None
+    assert s02.categoria_alterada is False
 
     assert len(log.riscos_manuais) == 1
     assert log.riscos_manuais[0].id == "MAN001"
     assert log.riscos_manuais[0].escolhido is True
     assert log.riscos_manuais[0].texto["risco"] == "Risco manual"
+    assert log.riscos_manuais[0].categoria == "selecao"
+    assert log.riscos_manuais[0].categoria_final == "selecao"
+    assert log.riscos_manuais[0].categoria_alterada is False
 
     assert log.totais.tamanho_matriz_final == 2
     assert log.totais.escolhidos_catalogo == 1
     assert log.totais.escolhidos_manual == 1
     assert log.respostas_finais == {"utilidade": 4, "confianca": 5, "esforco": 2, "comentario": "ok"}
+    assert log_consistency_errors(log.to_dict()) == []
 
 
 def test_build_evaluation_log_manual_risk_not_selected_is_not_escolhido():
@@ -401,6 +414,104 @@ def test_build_evaluation_log_manual_risk_not_selected_is_not_escolhido():
 
     assert log.riscos_manuais[0].escolhido is False
     assert log.totais.tamanho_matriz_final == 0
+    assert log.riscos_manuais[0].categoria_final is None
+    assert log.riscos_manuais[0].categoria_alterada is False
+    assert log_consistency_errors(log.to_dict()) == []
+
+
+def test_build_evaluation_log_tracks_unchecked_inclusion_and_category_changes():
+    """Cobre os dois casos que o resumo/consolidacao precisa diferenciar:
+    um item escolhido na aba Sugestoes mas desmarcado na Revisao (nao entra
+    na matriz, categoria_final vira None), e um item que entrou na matriz
+    mas com a "Categoria no mapa" alterada em relacao a categoria original -
+    tanto para um item as cegas quanto para um risco manual."""
+    items_by_slot = {
+        "S01": {
+            "row": MatrixRow(
+                id="R001", risco="x", categoria="planejamento", causa="", consequencias=[],
+                probabilidade=3, impacto=3, nivel="moderado", estrategia="mitigar",
+                acoes_preventivas=[], acoes_contingencia=[],
+            ),
+            "origin": ORIGIN_CATALOG,
+            "categoria": "planejamento",
+            "posicao": 1,
+            "incluido": True,
+            "defaults": {
+                "risco": "Risco original", "causa": "", "consequencias": [], "preventivas": [], "contingencias": [],
+            },
+        },
+        "S02": {
+            "row": MatrixRow(
+                id="", risco="y", categoria="planejamento", causa="", consequencias=[],
+                probabilidade=3, impacto=3, nivel="moderado", estrategia="mitigar",
+                acoes_preventivas=[], acoes_contingencia=[],
+            ),
+            "origin": ORIGIN_AI,
+            "categoria": "planejamento",
+            "posicao": 2,
+            "incluido": True,
+            "defaults": {
+                "risco": "Risco IA", "causa": "", "consequencias": [], "preventivas": [], "contingencias": [],
+            },
+        },
+    }
+    edited_rows = [
+        _matrix_row("S01", "planejamento", "Risco editado"),  # desmarcado abaixo
+        _matrix_row("S02", "selecao", "Risco IA editado"),  # categoria mudou de planejamento -> selecao
+        _matrix_row("MAN001", "gestao", "Risco manual"),  # categoria mudou de selecao -> gestao
+        _matrix_row("MAN002", "planejamento", "Risco manual 2"),  # desmarcado abaixo
+    ]
+    edited_rows[0].selecionado = False
+    edited_rows[3].selecionado = False
+    manual_rows = [
+        _matrix_row("MAN001", "selecao", "Risco manual (original)"),
+        _matrix_row("MAN002", "planejamento", "Risco manual 2 (original)"),
+    ]
+    selected_rows = [row for row in edited_rows if row.selecionado]
+
+    log = build_evaluation_log(
+        codigo_processo="PROC-4",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=1,
+        nome_caso=None,
+        experiencia="mais_5",
+        items_by_slot=items_by_slot,
+        review_decisions={},
+        edited_rows=edited_rows,
+        manual_rows=manual_rows,
+        selected_rows=selected_rows,
+        falhas_ia=[],
+        respostas_finais={},
+    )
+
+    s01 = next(s for s in log.sugestoes if s.slot_id == "S01")
+    assert s01.escolhido is True
+    assert s01.incluido_matriz is False  # escolhido, mas desmarcado na Revisao
+    assert s01.categoria_final is None
+    assert s01.categoria_alterada is False
+
+    s02 = next(s for s in log.sugestoes if s.slot_id == "S02")
+    assert s02.incluido_matriz is True
+    assert s02.categoria == "planejamento"
+    assert s02.categoria_final == "selecao"
+    assert s02.categoria_alterada is True
+
+    man1 = next(m for m in log.riscos_manuais if m.id == "MAN001")
+    assert man1.escolhido is True
+    assert man1.categoria == "selecao"
+    assert man1.categoria_final == "gestao"
+    assert man1.categoria_alterada is True
+
+    man2 = next(m for m in log.riscos_manuais if m.id == "MAN002")
+    assert man2.escolhido is False
+    assert man2.categoria_final is None
+    assert man2.categoria_alterada is False
+
+    assert log_consistency_errors(log.to_dict()) == []
 
 
 def test_build_evaluation_log_records_ai_failures():
@@ -424,3 +535,83 @@ def test_build_evaluation_log_records_ai_failures():
     )
 
     assert log.falhas_ia == [{"categoria": "planejamento", "erro": "timeout"}]
+
+
+def test_log_consistency_errors_is_empty_for_a_freshly_built_log():
+    log = build_evaluation_log(
+        codigo_processo="PROC-5",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=7,
+        nome_caso="Caso X",
+        experiencia="2_a_5",
+        items_by_slot=_sample_items_by_slot(),
+        review_decisions={"S01": {"editado": True, "proporcao_edicao": 0.3}},
+        edited_rows=[_matrix_row("S01", "planejamento", "Risco editado")],
+        manual_rows=[_matrix_row("MAN001", "selecao", "Risco manual")],
+        selected_rows=[
+            _matrix_row("S01", "planejamento", "Risco editado"),
+            _matrix_row("MAN001", "selecao", "Risco manual"),
+        ],
+        falhas_ia=[],
+        respostas_finais={},
+    )
+
+    assert log_consistency_errors(log.to_dict()) == []
+
+
+def test_log_consistency_errors_flags_a_tampered_total():
+    log = build_evaluation_log(
+        codigo_processo="PROC-6",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=7,
+        nome_caso="Caso X",
+        experiencia="2_a_5",
+        items_by_slot=_sample_items_by_slot(),
+        review_decisions={},
+        edited_rows=[_matrix_row("S01", "planejamento", "Risco editado")],
+        manual_rows=[],
+        selected_rows=[_matrix_row("S01", "planejamento", "Risco editado")],
+        falhas_ia=[],
+        respostas_finais={},
+    )
+    data = log.to_dict()
+    data["totais"]["escolhidos_catalogo"] = 99
+
+    errors = log_consistency_errors(data)
+
+    assert any("escolhidos_catalogo" in error for error in errors)
+
+
+def test_log_consistency_errors_flags_a_tampered_category_breakdown():
+    log = build_evaluation_log(
+        codigo_processo="PROC-7",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=7,
+        nome_caso="Caso X",
+        experiencia="2_a_5",
+        items_by_slot=_sample_items_by_slot(),
+        review_decisions={},
+        edited_rows=[_matrix_row("S01", "planejamento", "Risco editado")],
+        manual_rows=[],
+        selected_rows=[_matrix_row("S01", "planejamento", "Risco editado")],
+        falhas_ia=[],
+        respostas_finais={},
+    )
+    data = log.to_dict()
+    data["totais"]["por_categoria"][0]["escolhidos_catalogo"] = 0
+
+    errors = log_consistency_errors(data)
+
+    assert any("por_categoria" in error for error in errors)

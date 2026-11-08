@@ -29,6 +29,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.eval_log import log_consistency_errors  # noqa: E402
+
 SCHEMA_VERSION = 2
 DEFAULT_LOG_DIR = ROOT / "data" / "avaliacao"
 
@@ -62,6 +64,12 @@ PROCESS_SUMMARY_FIELDS = [
     "adocao_ia_pct",
     "editados_catalogo",
     "editados_ia",
+    "desmarcados_na_revisao_catalogo",
+    "desmarcados_na_revisao_ia",
+    "desmarcados_na_revisao_manual",
+    "categoria_alterada_catalogo",
+    "categoria_alterada_ia",
+    "categoria_alterada_manual",
     "riscos_manuais",
     "utilidade",
     "confianca",
@@ -92,6 +100,11 @@ def load_logs(log_dir: Path) -> list[dict]:
         if versao != SCHEMA_VERSION:
             print(f"Aviso: {path.name} usa schema antigo (versao_schema={versao!r}); pulando.")
             continue
+        errors = log_consistency_errors(log)
+        if errors:
+            print(f"AVISO: {path.name} falhou na verificacao de consistencia:")
+            for error in errors:
+                print(f"  - {error}")
         logs.append(log)
     return logs
 
@@ -101,9 +114,33 @@ def experience_band(log: dict) -> str:
     return experiencia if experiencia in EXPERIENCE_ORDER else EXPERIENCE_UNKNOWN
 
 
+def _desmarcados_na_revisao(sugestoes: list[dict], riscos_manuais: list[dict], origem: str) -> int:
+    """Itens que avancaram ate a Revisao mas nao ficaram na matriz final.
+
+    Catalogo/IA: escolhidos na aba Sugestoes e depois desmarcados em
+    "Incluir na matriz". Manuais: criados na Revisao (ja nascem marcados)
+    e depois desmarcados - nao ha uma etapa de "Sugestoes" para eles.
+    """
+    if origem == "manual":
+        return sum(1 for item in riscos_manuais if not item.get("escolhido"))
+    return sum(
+        1
+        for item in sugestoes
+        if item.get("origem") == origem and item.get("escolhido") and not item.get("incluido_matriz")
+    )
+
+
+def _categoria_alterada(sugestoes: list[dict], riscos_manuais: list[dict], origem: str) -> int:
+    if origem == "manual":
+        return sum(1 for item in riscos_manuais if item.get("categoria_alterada"))
+    return sum(1 for item in sugestoes if item.get("origem") == origem and item.get("categoria_alterada"))
+
+
 def process_summary_row(log: dict) -> dict:
     totais = log.get("totais") or {}
     respostas = log.get("respostas_finais") or {}
+    sugestoes = log.get("sugestoes") or []
+    riscos_manuais = log.get("riscos_manuais") or []
     return {
         "codigo_processo": log.get("codigo_processo", ""),
         "nome_caso": log.get("nome_caso") or "",
@@ -125,7 +162,13 @@ def process_summary_row(log: dict) -> dict:
         "adocao_ia_pct": totais.get("adocao_ia_pct", 0.0),
         "editados_catalogo": totais.get("editados_catalogo", 0),
         "editados_ia": totais.get("editados_ia", 0),
-        "riscos_manuais": len(log.get("riscos_manuais") or []),
+        "desmarcados_na_revisao_catalogo": _desmarcados_na_revisao(sugestoes, riscos_manuais, "catalogo"),
+        "desmarcados_na_revisao_ia": _desmarcados_na_revisao(sugestoes, riscos_manuais, "ia"),
+        "desmarcados_na_revisao_manual": _desmarcados_na_revisao(sugestoes, riscos_manuais, "manual"),
+        "categoria_alterada_catalogo": _categoria_alterada(sugestoes, riscos_manuais, "catalogo"),
+        "categoria_alterada_ia": _categoria_alterada(sugestoes, riscos_manuais, "ia"),
+        "categoria_alterada_manual": _categoria_alterada(sugestoes, riscos_manuais, "manual"),
+        "riscos_manuais": len(riscos_manuais),
         "utilidade": respostas.get("utilidade", ""),
         "confianca": respostas.get("confianca", ""),
         "esforco": respostas.get("esforco", ""),

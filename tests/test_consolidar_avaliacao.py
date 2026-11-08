@@ -106,6 +106,123 @@ def test_experience_band_falls_back_to_unknown_for_blank_or_unexpected_value():
     assert consolidar_avaliacao.experience_band({"experiencia": "mais_5"}) == "mais_5"
 
 
+def _consistent_log_with_detail(codigo: str) -> dict:
+    """Log com ``sugestoes``/``riscos_manuais`` detalhados (incluido_matriz,
+    categoria_final, categoria_alterada) que batem com ``totais`` - ao
+    contrario de ``_sample_log``, que so define os totais agregados."""
+    return {
+        "versao_schema": 2,
+        "codigo_processo": codigo,
+        "nome_caso": "Caso exemplo",
+        "experiencia": "2_a_5",
+        "data_hora": "2026-01-01T00:00:00+00:00",
+        "idioma": "pt",
+        "provedor_ia": "anthropic",
+        "modelo_ia": "claude-test",
+        "versao_prompt": "v2",
+        "hash_biblioteca": "hash123",
+        "semente": 1,
+        "sugestoes": [
+            {
+                "slot_id": "S01",
+                "categoria": "planejamento",
+                "origem": "catalogo",
+                "escolhido": True,
+                "incluido_matriz": True,
+                "categoria_final": "planejamento",
+                "categoria_alterada": False,
+            },
+            {
+                "slot_id": "S02",
+                "categoria": "planejamento",
+                "origem": "ia",
+                "escolhido": True,
+                "incluido_matriz": False,
+                "categoria_final": None,
+                "categoria_alterada": False,
+            },
+            {
+                "slot_id": "S03",
+                "categoria": "planejamento",
+                "origem": "ia",
+                "escolhido": True,
+                "incluido_matriz": True,
+                "categoria_final": "selecao",
+                "categoria_alterada": True,
+            },
+        ],
+        "riscos_manuais": [
+            {
+                "id": "MAN001",
+                "categoria": "planejamento",
+                "escolhido": False,
+                "categoria_final": None,
+                "categoria_alterada": False,
+            }
+        ],
+        "totais": {
+            "mostrados_catalogo": 1,
+            "mostrados_ia": 2,
+            "escolhidos_catalogo": 1,
+            "escolhidos_ia": 1,
+            "escolhidos_manual": 0,
+            "tamanho_matriz_final": 2,
+            "participacao_catalogo_pct": 50.0,
+            "participacao_ia_pct": 50.0,
+            "participacao_manual_pct": 0.0,
+            "adocao_ia_pct": 50.0,
+            "editados_catalogo": 0,
+            "editados_ia": 0,
+            "por_categoria": [
+                {"categoria": "planejamento", "escolhidos_catalogo": 1, "escolhidos_ia": 0, "escolhidos_manual": 0},
+                {"categoria": "selecao", "escolhidos_catalogo": 0, "escolhidos_ia": 1, "escolhidos_manual": 0},
+            ],
+        },
+        "falhas_ia": [],
+        "respostas_finais": {"utilidade": 4, "confianca": 5, "esforco": 2, "comentario": "ok"},
+    }
+
+
+def test_load_logs_warns_when_consistency_check_fails(tmp_path, capsys):
+    log_dir = tmp_path / "avaliacao"
+    log_dir.mkdir()
+    (log_dir / "inconsistente.json").write_text(json.dumps(_sample_log("P1")), encoding="utf-8")
+
+    consolidar_avaliacao.load_logs(log_dir)
+
+    captured = capsys.readouterr()
+    assert "AVISO" in captured.out
+    assert "inconsistente.json" in captured.out
+    assert "consistencia" in captured.out
+
+
+def test_load_logs_does_not_warn_for_a_consistent_log(tmp_path, capsys):
+    log_dir = tmp_path / "avaliacao"
+    log_dir.mkdir()
+    (log_dir / "consistente.json").write_text(json.dumps(_consistent_log_with_detail("P1")), encoding="utf-8")
+
+    consolidar_avaliacao.load_logs(log_dir)
+
+    captured = capsys.readouterr()
+    assert "AVISO" not in captured.out
+
+
+def test_process_summary_row_breaks_down_desmarcados_and_categoria_alterada_by_origin():
+    log = _consistent_log_with_detail("P1")
+
+    row = consolidar_avaliacao.process_summary_row(log)
+
+    # S02: escolhido na aba Sugestoes (origem IA), mas desmarcado na Revisao.
+    assert row["desmarcados_na_revisao_catalogo"] == 0
+    assert row["desmarcados_na_revisao_ia"] == 1
+    # MAN001: criado na Revisao (ja nasce marcado) e depois desmarcado.
+    assert row["desmarcados_na_revisao_manual"] == 1
+    # S03: entrou na matriz com "Categoria no mapa" diferente da original.
+    assert row["categoria_alterada_catalogo"] == 0
+    assert row["categoria_alterada_ia"] == 1
+    assert row["categoria_alterada_manual"] == 0
+
+
 def test_load_logs_skips_old_schema_with_warning(tmp_path, capsys):
     log_dir = tmp_path / "avaliacao"
     log_dir.mkdir()
