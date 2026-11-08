@@ -24,6 +24,8 @@ streamlit run app.py
 
 Requer Streamlit 1.53 ou superior (a troca de idioma depende da identidade dos widgets por chave).
 
+Para desenvolver e rodar os testes, instale `requirements-dev.txt` em vez de `requirements.txt` (inclui o pytest) e rode `pytest`.
+
 ## Idiomas / Languages
 
 A interface está disponível em português e inglês, com seletor no topo da barra lateral. Para abrir direto em inglês, use `?lang=en` na URL. A troca de idioma preserva tudo o que foi preenchido.
@@ -41,12 +43,13 @@ Estado atual: interface e biblioteca de riscos bilíngues; a justificativa das s
 ```text
 app.py                          Interface Streamlit
 data/riscos_base.csv            Biblioteca inicial de riscos
-data/candidatos_ia.csv          Riscos de IA escolhidos (gerado em runtime; fora do versionamento)
 data/casos/                     Casos compartilhados (contexto + cache de riscos de IA por caso/idioma)
-data/avaliacao/                 Log por processo da avaliação (gerado em runtime; fora do versionamento)
 locales/pt.json                 Textos da interface em português
 locales/en.json                 Textos da interface em inglês
 prompts/gerar_risco_v2.txt      Prompt versionado usado para gerar os riscos de IA (v1 mantido para referência)
+requirements.txt                Dependências de produção (deploy no Streamlit Cloud)
+requirements-dev.txt            + pytest, para desenvolvimento local
+.streamlit/secrets.example.toml Modelo dos secrets (AI_PROVIDER, AI_MODEL, chaves, MODO_AVALIACAO)
 scripts/consolidar_avaliacao.py Consolidação dos logs de avaliação (resumo por processo e por categoria)
 src/domain.py                   Códigos de domínio e rótulos por idioma
 src/i18n.py                     Função t() de tradução
@@ -55,10 +58,12 @@ src/eval_mode.py                Flag MODO_AVALIACAO e hash da biblioteca
 src/risk_generator.py           Prompt e validação do risco gerado por IA
 src/catalog_mix.py              Lista cega catálogo+IA por categoria (sem pontuação nem pareamento)
 src/case_store.py               Casos compartilhados e cache de riscos de IA por caso/idioma
-src/eval_log.py                 Schema e gravação do log de avaliação por processo
+src/eval_log.py                 Schema do log de avaliação, montagem (build_evaluation_log) e gravação local opcional
 src/                            Regras, modelos e exportadores
 tests/                          Testes da lógica central, da troca de idioma e da avaliação
 ```
+
+Os logs de avaliação (`log_<código>_<sessão>.json`) são baixados pelo participante na aba "Exportação" — nada fica salvo no disco da aplicação (veja "Rodar no Streamlit Cloud" abaixo). Para consolidar, junte os arquivos recebidos numa pasta local qualquer (ex.: `logs_recebidos/`) e aponte `--log-dir` para ela.
 
 Para adicionar ou alterar um texto da interface, edite a mesma chave em `locales/pt.json` e `locales/en.json`; o teste `tests/test_i18n.py` falha se as chaves divergirem.
 
@@ -87,7 +92,7 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 streamlit run app.py
 ```
 
-Sem chave configurada (ou se a chamada falhar), o app mostra um aviso e segue a avaliação só com o catálogo — nenhuma sugestão de IA é exibida nas categorias afetadas, e a falha fica registrada no log. O prompt usado fica versionado em `prompts/gerar_risco_v2.txt`; a versão (`v2`) é gravada em cada log.
+Sem chave configurada (ou se a chamada falhar), o app mostra um aviso e segue a avaliação só com o catálogo — nenhuma sugestão de IA é exibida nas categorias afetadas, e a falha fica registrada no log exportado. O prompt usado fica versionado em `prompts/gerar_risco_v2.txt`; a versão (`v2`) é gravada em cada log.
 
 ### Criar um caso compartilhado
 
@@ -99,9 +104,9 @@ Para que todos os participantes vejam exatamente os mesmos riscos de IA, crie um
 streamlit run app.py
 ```
 
-Na barra lateral, informe um **código do processo** (texto livre, sem dados pessoais), escolha um **caso** (ou preencha a contratação manualmente) e clique em **"Gerar sugestões"** — só então a IA é chamada; abrir a tela ou editar um campo não gera nada sozinho. Na aba "Sugestões", marque quantos itens quiser por categoria (lista às cegas, catálogo+IA misturados). Na aba "Revisão humana" aparecem só os itens escolhidos (mais os riscos manuais), para editar livremente; desmarcar um item na aba "Sugestões" o remove da revisão, e marcá-lo de novo preserva a edição anterior. Na aba "Exportação", além da matriz final e dos downloads, a seção **"Resultado da avaliação"** mostra a origem de cada risco (catálogo/IA/manual), a composição da matriz, a adoção das sugestões de IA e os editados por origem; o formulário final pede a **experiência com contratações de TIC** (obrigatória) e as 3 perguntas de escala 1-5 + um comentário opcional. "Salvar avaliação" grava o log do processo em `data/avaliacao/<código>_<sessão>.json` e os riscos de IA escolhidos em `data/candidatos_ia.csv`; salvar de novo (depois de alterar algo) sobrescreve o mesmo arquivo de log, sem duplicar.
+Na barra lateral, informe um **código do processo** (texto livre, sem dados pessoais), escolha um **caso** (ou preencha a contratação manualmente) e clique em **"Gerar sugestões"** — só então a IA é chamada; abrir a tela ou editar um campo não gera nada sozinho. Na aba "Sugestões", marque quantos itens quiser por categoria (lista às cegas, catálogo+IA misturados). Na aba "Revisão humana" aparecem só os itens escolhidos (mais os riscos manuais), para editar livremente; desmarcar um item na aba "Sugestões" o remove da revisão, e marcá-lo de novo preserva a edição anterior. Na aba "Exportação", além da matriz final e dos downloads, a seção **"Resultado da avaliação"** mostra a origem de cada risco (catálogo/IA/manual), a composição da matriz, a adoção das sugestões de IA e os editados por origem; o formulário final pede a **experiência com contratações de TIC** (obrigatória) e as 3 perguntas de escala 1-5 + um comentário opcional. **"Exportar log da avaliação (.json)"** baixa o log do processo (`log_<código>_<sessão>.json`) com o estado atual — nada é gravado no servidor (o disco do Streamlit Cloud é efêmero); ao terminar, cada participante envia esse arquivo ao pesquisador.
 
-Durante a avaliação (`MODO_AVALIACAO`, ligado por padrão nesta branch), nada é gravado em `data/riscos_base.csv`: riscos de IA escolhidos vão para `data/candidatos_ia.csv`, e o botão de salvar manualmente na biblioteca (revisão humana) fica desativado. Para desligar (voltando a gravar direto na biblioteca), defina `MODO_AVALIACAO=false` por variável de ambiente ou em `secrets.toml`.
+Durante a avaliação (`MODO_AVALIACAO`, ligado por padrão nesta branch), o botão de salvar manualmente na biblioteca (revisão humana) fica desativado, para não alterar `data/riscos_base.csv` durante a coleta. Para desligar, defina `MODO_AVALIACAO=false` por variável de ambiente ou em `secrets.toml`.
 
 ### Consolidar os resultados
 
@@ -109,7 +114,19 @@ Durante a avaliação (`MODO_AVALIACAO`, ligado por padrão nesta branch), nada 
 python scripts/consolidar_avaliacao.py
 ```
 
-Lê todos os JSON de schema v2 em `data/avaliacao/` (logs de schema antigo são pulados com um aviso), gera `resumo_processos.csv` (uma linha por processo: código, caso, experiência, mostrados/escolhidos por origem, tamanho da matriz, participação percentual por origem, adoção da IA, editados por origem, riscos manuais, respostas do formulário) e `resumo_categorias.csv` (composição da matriz final por categoria, somada entre todos os processos) na raiz do projeto. No terminal, imprime um relatório **geral e por faixa de experiência** com o número de processos, o tamanho médio da matriz, a participação média de catálogo/IA/manual, a adoção média da IA, a média de riscos manuais e as respostas médias do formulário — só estatística descritiva, sem comparação direta entre a taxa da IA e a do catálogo. Use `--log-dir` e `--out-dir` para outros caminhos.
+Junte os arquivos `log_*.json` baixados pelos participantes numa pasta (ex.: `logs_recebidos/`) e aponte `--log-dir` para ela. O script lê todos os JSON de schema v2 ali dentro (logs de schema antigo são pulados com um aviso), gera `resumo_processos.csv` (uma linha por processo: código, caso, experiência, mostrados/escolhidos por origem, tamanho da matriz, participação percentual por origem, adoção da IA, editados por origem, riscos manuais, respostas do formulário) e `resumo_categorias.csv` (composição da matriz final por categoria, somada entre todos os processos) na raiz do projeto. No terminal, imprime um relatório **geral e por faixa de experiência** com o número de processos, o tamanho médio da matriz, a participação média de catálogo/IA/manual, a adoção média da IA, a média de riscos manuais e as respostas médias do formulário — só estatística descritiva, sem comparação direta entre a taxa da IA e a do catálogo.
+
+```powershell
+python scripts/consolidar_avaliacao.py --log-dir logs_recebidos --out-dir .
+```
+
+## Rodar no Streamlit Cloud
+
+1. No [Streamlit Community Cloud](https://share.streamlit.io), crie um app a partir do repositório `tamerpedro/app-mestrado-dtp-ia`, branch `feature/catalogo-misto-ia` (ou a branch de avaliação em uso), arquivo principal `app.py`.
+2. Em "Settings → Secrets" do app, cole o conteúdo de `.streamlit/secrets.example.toml` já preenchido com os valores reais (`AI_PROVIDER`, `AI_MODEL`, `ANTHROPIC_API_KEY` e, se quiser, `MODO_AVALIACAO`) — nunca comite esse arquivo preenchido.
+3. O caso de exemplo (`data/casos/exemplo.json`) já sobe com o cache de riscos de IA (`data/casos/exemplo_ia_pt.json`) versionado, então participantes que usarem esse caso não dependem de uma chamada de IA bem-sucedida no deploy.
+4. O disco do Streamlit Cloud é efêmero (reinicia a cada deploy/sleep): o log de cada avaliação **não fica salvo no servidor** — cada participante baixa o próprio log pela aba "Exportação" (`log_<código>_<sessão>.json`) e envia o arquivo ao pesquisador (e-mail, upload etc.).
+5. Para consolidar: junte os arquivos recebidos numa pasta local e rode `python scripts/consolidar_avaliacao.py --log-dir <pasta>` (veja "Consolidar os resultados" acima).
 
 ## Decisao de Projeto
 

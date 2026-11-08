@@ -15,3 +15,4 @@ data/avaliacao/
 data/candidatos_ia.csv
 data/casos/*.json
 !data/casos/exemplo.json
+!data/casos/exemplo_ia_pt.json
