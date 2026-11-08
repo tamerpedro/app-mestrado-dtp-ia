@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
+import uuid
 from collections import defaultdict
 from html import escape
 import io
@@ -13,6 +15,7 @@ from openpyxl import Workbook
 from src.ai_provider import AIProviderError, FakeProvider, build_provider, load_ai_config
 from src.case_store import get_or_generate_case_ai_risks, list_case_files, load_case
 from src.catalog_mix import (
+    ORIGIN_AI,
     ORIGIN_CATALOG,
     CategoryItems,
     build_category_mix,
@@ -37,8 +40,17 @@ from src.domain import (
     risk_level_label,
     strategy_label,
 )
-from src.eval_log import edit_ratio
-from src.eval_mode import is_modo_avaliacao
+from src.eval_log import (
+    ORIGIN_MANUAL,
+    EvaluationLog,
+    ManualRiskLogEntry,
+    SuggestionLogEntry,
+    compute_totals,
+    edit_ratio,
+    save_evaluation_log,
+)
+from src.eval_mode import is_modo_avaliacao, library_hash
+from src.risk_generator import PROMPT_VERSION_V2
 from src.i18n import DEFAULT_LANGUAGE, LANGUAGES, normalize_language, t
 from src.exporters import EXPORT_FIELDS, row_to_export_dict, selected_rows, to_csv, to_latex
 from src.models import ActionItem, ContractContext, MatrixRow
@@ -47,8 +59,12 @@ from src.scoring import IMPACT_OPTIONS, PROBABILITY_OPTIONS, canonical_scale, ri
 
 
 DATA_PATH = Path("data/riscos_base.csv")
+CANDIDATES_PATH = Path("data/candidatos_ia.csv")
+LOG_DIR = Path("data/avaliacao")
 LOGO_PATH = Path("assets/dataprev-logo.png")
 NO_CASE = "__nenhum__"
+LIKERT_SCALE = [1, 2, 3, 4, 5]
+EXPERIENCE_OPTIONS = ["ate_2", "2_a_5", "mais_5"]
 
 _SLOT_ID_RE = re.compile(r"S\d{2,}")
 
@@ -456,6 +472,29 @@ def row_text_blob(row: MatrixRow) -> str:
     return "||".join([row.risco, row.causa, row.consequencia, row.acao_preventiva, row.acao_contingencia])
 
 
+def submission_fingerprint(
+    codigo_processo: str,
+    experiencia: str | None,
+    utilidade: int,
+    confianca: int,
+    esforco: int,
+    comentario: str,
+    selected: list[MatrixRow],
+) -> str:
+    """Resumo do que seria salvo: muda se o usuario alterar qualquer coisa
+    depois de salvar, o que reabilita o botao "Salvar avaliacao"."""
+    parts = [
+        codigo_processo,
+        experiencia or "",
+        str(utilidade),
+        str(confianca),
+        str(esforco),
+        comentario.strip(),
+        "|".join(f"{row.id}:{row_text_blob(row)}" for row in selected),
+    ]
+    return hashlib.sha256("||".join(parts).encode("utf-8")).hexdigest()
+
+
 def render_language_selector() -> None:
     st.radio(
         tr("sidebar.language"),
@@ -491,9 +530,13 @@ def _apply_case_to_context_fields(context: ContractContext) -> None:
         pass
 
 
-def render_case_selector() -> Path | None:
+def render_case_selector() -> tuple[Path | None, str | None]:
     """Seletor "Caso" na barra lateral; aplica o contexto do caso escolhido
-    uma unica vez (na troca), para o usuario poder editar depois."""
+    uma unica vez (na troca), para o usuario poder editar depois.
+
+    Devolve ``(caminho, nome)`` do caso selecionado (ambos ``None`` para
+    "Nenhum, preencher manualmente") - o nome vai para o log na Parte 3.
+    """
     case_files = list_case_files()
     options = [NO_CASE, *(str(path) for path in case_files)]
     labels = {NO_CASE: tr("case.none")}
@@ -515,10 +558,12 @@ def render_case_selector() -> Path | None:
     elif selected == NO_CASE:
         st.session_state._applied_case = None
 
-    return Path(selected) if selected != NO_CASE else None
+    if selected == NO_CASE:
+        return None, None
+    return Path(selected), labels.get(selected)
 
 
-def build_context() -> tuple[ContractContext, bool, Path | None]:
+def build_context() -> tuple[ContractContext, bool, Path | None, str | None]:
     with st.sidebar:
         st.markdown(
             f"""
@@ -531,7 +576,7 @@ def build_context() -> tuple[ContractContext, bool, Path | None]:
         )
         render_language_selector()
         st.text_input(tr("process.code"), help=tr("process.help"), key="codigo_processo")
-        selected_case_path = render_case_selector()
+        selected_case_path, selected_case_name = render_case_selector()
         st.header(tr("sidebar.contract"))
         objeto = st.text_area(tr("field.object"), value=tr("field.object_default"), key="ctx_objeto")
         tipo = select(
@@ -588,7 +633,7 @@ def build_context() -> tuple[ContractContext, bool, Path | None]:
         modalidade=modalidade,
         contexto=contexto,
     )
-    return context, generate_clicked, selected_case_path
+    return context, generate_clicked, selected_case_path, selected_case_name
 
 
 FINAL_MATRIX_COLUMNS = {
@@ -971,12 +1016,13 @@ def render_blind_category(
             "row": row,
             "origin": item.origin,
             "categoria": category.categoria,
+            "posicao": item.posicao,
             "defaults": defaults,
             "incluido": incluido,
         }
 
 
-context, generate_clicked, selected_case_path = build_context()
+context, generate_clicked, selected_case_path, selected_case_name = build_context()
 try:
     risks = load_risks(DATA_PATH)
 except ValueError as exc:
@@ -1072,8 +1118,6 @@ with tab3:
 
     selected = selected_rows(edited_rows)
 
-    st.caption(tr("export.final_pending"))
-
     col1, col2, col3 = st.columns(3)
     col1.metric(tr("metric.selected"), len(selected))
     col2.metric(tr("metric.preventive"), sum(len(row.acoes_preventivas) for row in selected))
@@ -1105,3 +1149,180 @@ with tab3:
             "mapa_de_gerenciamento_de_riscos.docx",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
+
+    render_section_label(tr("result.section_title"))
+
+    slot_origin = {slot: info["origin"] for slot, info in items_by_slot.items()}
+    review_decisions = st.session_state.get("review_decisions", {})
+    totals = compute_totals(items_by_slot, review_decisions, selected, slot_origin)
+
+    if not selected:
+        st.info(tr("result.empty"))
+    else:
+        render_section_label(tr("result.reveal_title"))
+        reveal_table = [
+            {
+                tr("col.id"): row.id,
+                tr("col.risk"): row.risco,
+                tr("col.category"): category_label(row.categoria, LANG),
+                tr("result.col_origin"): tr(f"result.origin_{slot_origin.get(row.id, ORIGIN_MANUAL)}"),
+            }
+            for row in selected
+        ]
+        st.dataframe(reveal_table, width="stretch", hide_index=True)
+
+        render_section_label(tr("result.composition_title"))
+        col1, col2, col3 = st.columns(3)
+        col1.metric(
+            tr("result.metric_catalogo"),
+            f"{totals.escolhidos_catalogo} ({totals.participacao_catalogo_pct:g}%)",
+        )
+        col2.metric(
+            tr("result.metric_ia"),
+            f"{totals.escolhidos_ia} ({totals.participacao_ia_pct:g}%)",
+        )
+        col3.metric(
+            tr("result.metric_manual"),
+            f"{totals.escolhidos_manual} ({totals.participacao_manual_pct:g}%)",
+        )
+        col4, col5, col6 = st.columns(3)
+        col4.metric(tr("result.metric_ai_adoption"), f"{totals.adocao_ia_pct:g}%")
+        col5.metric(tr("result.metric_edited_catalogo"), totals.editados_catalogo)
+        col6.metric(tr("result.metric_edited_ia"), totals.editados_ia)
+
+        render_section_label(tr("result.by_category_title"))
+        category_order = {categoria: index for index, categoria in enumerate(CATEGORIES)}
+        category_table = [
+            {
+                tr("col.category"): category_label(cat.categoria, LANG),
+                tr("result.metric_catalogo"): cat.escolhidos_catalogo,
+                tr("result.metric_ia"): cat.escolhidos_ia,
+                tr("result.metric_manual"): cat.escolhidos_manual,
+            }
+            for cat in sorted(totals.por_categoria, key=lambda cat: category_order.get(cat.categoria, len(CATEGORIES)))
+        ]
+        st.dataframe(category_table, width="stretch", hide_index=True)
+
+    render_section_label(tr("final_form.title"))
+    experiencia = st.radio(
+        tr("final_form.experience"),
+        EXPERIENCE_OPTIONS,
+        format_func=lambda value: tr(f"experience.{value}"),
+        index=None,
+        key="experiencia",
+    )
+    utilidade = st.radio(tr("likert.usefulness"), LIKERT_SCALE, horizontal=True, key="likert_utilidade")
+    confianca = st.radio(tr("likert.confidence"), LIKERT_SCALE, horizontal=True, key="likert_confianca")
+    esforco = st.radio(tr("likert.effort"), LIKERT_SCALE, horizontal=True, key="likert_esforco")
+    comentario = st.text_area(tr("likert.comment"), key="likert_comentario")
+
+    codigo_processo = (st.session_state.get("codigo_processo") or "").strip()
+    if not codigo_processo:
+        st.warning(tr("likert.missing_process_code"))
+    if not experiencia:
+        st.warning(tr("final_form.missing_experience"))
+
+    fingerprint = submission_fingerprint(
+        codigo_processo, experiencia, utilidade, confianca, esforco, comentario, selected
+    )
+    already_saved = st.session_state.get("_saved_fingerprint") == fingerprint
+    can_save = bool(codigo_processo) and bool(experiencia) and not already_saved
+
+    if st.button(tr("likert.submit"), disabled=not can_save, key="btn_save_evaluation"):
+        session_id = st.session_state.setdefault("_session_id", uuid.uuid4().hex[:10])
+        log = EvaluationLog(
+            codigo_processo=codigo_processo,
+            idioma=LANG,
+            provedor_ia=ai_config.provider,
+            modelo_ia=ai_config.model,
+            versao_prompt=PROMPT_VERSION_V2,
+            hash_biblioteca=library_hash(DATA_PATH),
+            semente=mix_result.seed if mix_result is not None else 0,
+            nome_caso=selected_case_name,
+            experiencia=experiencia,
+        )
+        log.falhas_ia = [{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(mix_failures)
+
+        edited_by_id = {row.id: row for row in edited_rows}
+        for slot, info in items_by_slot.items():
+            decision = review_decisions.get(slot, {})
+            defaults = info["defaults"]
+            texto_mostrado = {
+                "risco": defaults["risco"],
+                "causa": defaults["causa"],
+                "consequencias": [text for text in defaults["consequencias"] if text],
+                "preventivas": [action.descricao for action in defaults["preventivas"] if action.descricao],
+                "contingencias": [action.descricao for action in defaults["contingencias"] if action.descricao],
+            }
+            texto_final = None
+            if decision.get("editado"):
+                edited_row = edited_by_id.get(slot)
+                if edited_row is not None:
+                    texto_final = {
+                        "risco": edited_row.risco,
+                        "causa": edited_row.causa,
+                        "consequencias": [text for text in edited_row.consequencias if text],
+                        "preventivas": [
+                            action.descricao for action in edited_row.acoes_preventivas if action.descricao
+                        ],
+                        "contingencias": [
+                            action.descricao for action in edited_row.acoes_contingencia if action.descricao
+                        ],
+                    }
+            log.sugestoes.append(
+                SuggestionLogEntry(
+                    slot_id=slot,
+                    categoria=info["categoria"],
+                    origem=info["origin"],
+                    id_catalogo=info["row"].id if info["origin"] == ORIGIN_CATALOG else None,
+                    posicao=info["posicao"],
+                    escolhido=info["incluido"],
+                    editado=decision.get("editado", False),
+                    proporcao_edicao=decision.get("proporcao_edicao", 0.0),
+                    texto_mostrado=texto_mostrado,
+                    texto_final=texto_final,
+                )
+            )
+
+        selected_ids = {row.id for row in selected}
+        for manual_row in st.session_state.manual_rows:
+            edited_manual = edited_by_id.get(manual_row.id, manual_row)
+            log.riscos_manuais.append(
+                ManualRiskLogEntry(
+                    id=manual_row.id,
+                    categoria=edited_manual.categoria,
+                    escolhido=manual_row.id in selected_ids,
+                    texto={
+                        "risco": edited_manual.risco,
+                        "causa": edited_manual.causa,
+                        "consequencias": [text for text in edited_manual.consequencias if text],
+                        "preventivas": [
+                            action.descricao for action in edited_manual.acoes_preventivas if action.descricao
+                        ],
+                        "contingencias": [
+                            action.descricao for action in edited_manual.acoes_contingencia if action.descricao
+                        ],
+                    },
+                )
+            )
+
+        log.totais = totals
+        log.respostas_finais = {
+            "utilidade": utilidade,
+            "confianca": confianca,
+            "esforco": esforco,
+            "comentario": comentario.strip(),
+        }
+        save_evaluation_log(log, directory=LOG_DIR, session_id=session_id)
+
+        library_target = CANDIDATES_PATH if is_modo_avaliacao() else DATA_PATH
+        for row in selected:
+            if slot_origin.get(row.id) == ORIGIN_AI:
+                save_matrix_row_to_library(library_target, row, context, lang=LANG)
+
+        st.session_state._saved_fingerprint = fingerprint
+        st.rerun()
+
+    if already_saved:
+        st.success(tr("likert.saved"))
+        st.caption(tr("likert.saved_disabled_caption"))
