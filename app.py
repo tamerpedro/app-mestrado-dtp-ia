@@ -698,6 +698,9 @@ def safe_index(options: list[str], value: str, default: int = 0) -> int:
 def add_manual_risk_form() -> None:
     ensure_manual_rows()
     with st.expander(tr("manual.expander"), expanded=False):
+        pending_message = st.session_state.pop("_manual_risk_added_message", None)
+        if pending_message:
+            st.success(pending_message)
         with st.form("manual_risk_form", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -747,7 +750,11 @@ def add_manual_risk_form() -> None:
                     tags=["manual"],
                 )
             )
-            st.success(tr("manual.added", id=manual_id))
+            st.session_state["_manual_risk_added_message"] = tr("manual.added", id=manual_id)
+            # Este form roda por ultimo no script (depois da aba de Revisao ja ter
+            # lido manual_rows); sem forcar um novo rerun agora, o risco recem
+            # adicionado so apareceria na Revisao/Exportacao na proxima interacao.
+            st.rerun()
         elif submitted:
             st.warning(tr("manual.missing_title"))
 

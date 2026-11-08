@@ -136,6 +136,27 @@ def test_manual_risk_form_has_no_id_field_and_generates_id_automatically():
     assert manual_rows[0].risco == "Risco manual de teste"
 
 
+def test_manual_risk_appears_in_review_right_after_being_added():
+    """Bug real reportado pelo usuario: ao adicionar um risco manual, ele so
+    aparecia na Revisao (e na Exportacao) depois que outro risco manual era
+    adicionado em seguida - ou seja, sempre um ciclo atrasado. A aba de
+    Revisao le ``manual_rows`` antes do formulario (que fica mais abaixo na
+    tela) processar a submissao, entao sem forcar um rerun o item novo nao
+    aparecia na mesma interacao em que foi adicionado."""
+    at = _run()
+
+    risco_box = next(box for box in at.text_input if box.label == "Risco")
+    risco_box.input("Risco manual de teste")
+    submit = next(btn for btn in at.button if btn.label == "Adicionar risco")
+    submit.click()
+    at.run()
+
+    assert not at.exception, at.exception
+    review_box = next((box for box in at.text_input if box.key == "risco_MAN001"), None)
+    assert review_box is not None, "o risco manual deveria aparecer na Revisao assim que adicionado"
+    assert review_box.value == "Risco manual de teste"
+
+
 def test_review_tab_never_reveals_catalog_or_ai_origin():
     at = _choose_items(_generate(_run()), count=3)
 
