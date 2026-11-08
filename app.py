@@ -20,6 +20,7 @@ from src.catalog_mix import (
     build_category_mix,
     generate_ai_risks_for_all_categories,
 )
+from src.currency import format_brl, parse_brl
 from src.docx_exporter import to_docx
 from src.domain import (
     ACTION_STATUSES,
@@ -123,6 +124,47 @@ def library_text(widget, label: str, default: str, *, key: str) -> str:
     st.session_state[seed_key] = default
     value = widget(label, key=key)
     sticky[key] = value
+    return value
+
+
+def currency_input(label: str, *, key: str, help: str | None = None) -> float:
+    """Campo de valor monetario com separador de milhar, para contratacoes de
+    qualquer porte (ate centenas de milhoes de reais) sem depender das setas
+    de incremento/decremento do ``st.number_input`` (inuteis nessa escala).
+
+    ``key`` guarda o valor numerico (``float``), lido/escrito por outras
+    partes do app (ex.: ao carregar um caso). O widget de texto em si troca
+    de chave (``f"{key}_text_<versao>"``) sempre que precisa mostrar um valor
+    diferente do que o usuario acabou de digitar - o Streamlit nao deixa
+    sobrescrever ``session_state`` de uma chave ja instanciada nesta rodada,
+    entao reformatar exige uma chave nova (e um rerun, para o texto
+    reformatado aparecer sem precisar de outra interacao do usuario). Uma
+    chave "semente" (mesma ideia de ``library_text``) distingue ``key``
+    mudar por fora (caso carregado) de mudar porque a propria digitacao do
+    usuario acabou de ser convertida.
+    """
+    version_key = f"{key}__version"
+    seed_key = f"{key}__seed"
+    canonical = st.session_state.get(key, 0.0)
+    seed = st.session_state.get(seed_key)
+    externally_changed = seed is None or canonical != seed
+    version = st.session_state.get(version_key, 0)
+    if externally_changed:
+        version += 1
+        st.session_state[version_key] = version
+    text_key = f"{key}_text_{version}"
+
+    if text_key not in st.session_state:
+        st.session_state[text_key] = format_brl(canonical)
+
+    text_value = st.text_input(label, help=help, key=text_key)
+    value = parse_brl(text_value)
+    st.session_state[key] = value
+    st.session_state[seed_key] = value
+
+    if text_value != format_brl(value):
+        st.session_state[version_key] = version + 1
+        st.rerun()
     return value
 
 
@@ -409,26 +451,6 @@ def render_section_label(label: str) -> None:
     st.markdown(f'<div class="dtp-section-label">{escape(label)}</div>', unsafe_allow_html=True)
 
 
-def hide_number_input_steppers(label: str) -> None:
-    """Esconde as setas +/- de um ``st.number_input`` pelo rotulo (``aria-label``).
-
-    Para valores grandes (contratacoes de centenas de milhoes de reais), subir
-    de 1 em 1 unidade de passo nao e util - so digitar o numero direto.
-    """
-    selector = f'div[data-testid="stNumberInput"]:has(input[aria-label="{escape(label)}"])'
-    st.markdown(
-        f"""
-        <style>
-        {selector} button[data-testid="stNumberInputStepUp"],
-        {selector} button[data-testid="stNumberInputStepDown"] {{
-            display: none;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 apply_dataprev_theme()
 
 
@@ -577,13 +599,7 @@ def build_context() -> tuple[ContractContext, bool, Path | None, str | None]:
             format_func=label_in(contract_type_label),
             key="ctx_tipo",
         )
-        valor = st.number_input(
-            tr("field.value"),
-            min_value=0.0,
-            help=tr("help.value"),
-            key="ctx_valor",
-        )
-        hide_number_input_steppers(tr("field.value"))
+        valor = currency_input(tr("field.value"), key="ctx_valor", help=tr("help.value"))
         criticidade = select(
             tr("field.criticality"),
             CRITICALITIES,
