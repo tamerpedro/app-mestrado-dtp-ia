@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-import hashlib
+import json
 import re
 import uuid
 from collections import defaultdict
@@ -15,7 +15,6 @@ from openpyxl import Workbook
 from src.ai_provider import AIProviderError, FakeProvider, build_provider, load_ai_config
 from src.case_store import get_or_generate_case_ai_risks, list_case_files, load_case
 from src.catalog_mix import (
-    ORIGIN_AI,
     ORIGIN_CATALOG,
     CategoryItems,
     build_category_mix,
@@ -42,12 +41,10 @@ from src.domain import (
 )
 from src.eval_log import (
     ORIGIN_MANUAL,
-    EvaluationLog,
-    ManualRiskLogEntry,
-    SuggestionLogEntry,
+    build_evaluation_log,
     compute_totals,
     edit_ratio,
-    save_evaluation_log,
+    safe_filename,
 )
 from src.eval_mode import is_modo_avaliacao, library_hash
 from src.risk_generator import PROMPT_VERSION_V2
@@ -59,8 +56,6 @@ from src.scoring import IMPACT_OPTIONS, PROBABILITY_OPTIONS, canonical_scale, ri
 
 
 DATA_PATH = Path("data/riscos_base.csv")
-CANDIDATES_PATH = Path("data/candidatos_ia.csv")
-LOG_DIR = Path("data/avaliacao")
 LOGO_PATH = Path("assets/dataprev-logo.png")
 NO_CASE = "__nenhum__"
 LIKERT_SCALE = [1, 2, 3, 4, 5]
@@ -470,29 +465,6 @@ def maybe_generate_mix(
 
 def row_text_blob(row: MatrixRow) -> str:
     return "||".join([row.risco, row.causa, row.consequencia, row.acao_preventiva, row.acao_contingencia])
-
-
-def submission_fingerprint(
-    codigo_processo: str,
-    experiencia: str | None,
-    utilidade: int,
-    confianca: int,
-    esforco: int,
-    comentario: str,
-    selected: list[MatrixRow],
-) -> str:
-    """Resumo do que seria salvo: muda se o usuario alterar qualquer coisa
-    depois de salvar, o que reabilita o botao "Salvar avaliacao"."""
-    parts = [
-        codigo_processo,
-        experiencia or "",
-        str(utilidade),
-        str(confianca),
-        str(esforco),
-        comentario.strip(),
-        "|".join(f"{row.id}:{row_text_blob(row)}" for row in selected),
-    ]
-    return hashlib.sha256("||".join(parts).encode("utf-8")).hexdigest()
 
 
 def render_language_selector() -> None:
@@ -1222,107 +1194,39 @@ with tab3:
     if not experiencia:
         st.warning(tr("final_form.missing_experience"))
 
-    fingerprint = submission_fingerprint(
-        codigo_processo, experiencia, utilidade, confianca, esforco, comentario, selected
-    )
-    already_saved = st.session_state.get("_saved_fingerprint") == fingerprint
-    can_save = bool(codigo_processo) and bool(experiencia) and not already_saved
-
-    if st.button(tr("likert.submit"), disabled=not can_save, key="btn_save_evaluation"):
-        session_id = st.session_state.setdefault("_session_id", uuid.uuid4().hex[:10])
-        log = EvaluationLog(
-            codigo_processo=codigo_processo,
-            idioma=LANG,
-            provedor_ia=ai_config.provider,
-            modelo_ia=ai_config.model,
-            versao_prompt=PROMPT_VERSION_V2,
-            hash_biblioteca=library_hash(DATA_PATH),
-            semente=mix_result.seed if mix_result is not None else 0,
-            nome_caso=selected_case_name,
-            experiencia=experiencia,
-        )
-        log.falhas_ia = [{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(mix_failures)
-
-        edited_by_id = {row.id: row for row in edited_rows}
-        for slot, info in items_by_slot.items():
-            decision = review_decisions.get(slot, {})
-            defaults = info["defaults"]
-            texto_mostrado = {
-                "risco": defaults["risco"],
-                "causa": defaults["causa"],
-                "consequencias": [text for text in defaults["consequencias"] if text],
-                "preventivas": [action.descricao for action in defaults["preventivas"] if action.descricao],
-                "contingencias": [action.descricao for action in defaults["contingencias"] if action.descricao],
-            }
-            texto_final = None
-            if decision.get("editado"):
-                edited_row = edited_by_id.get(slot)
-                if edited_row is not None:
-                    texto_final = {
-                        "risco": edited_row.risco,
-                        "causa": edited_row.causa,
-                        "consequencias": [text for text in edited_row.consequencias if text],
-                        "preventivas": [
-                            action.descricao for action in edited_row.acoes_preventivas if action.descricao
-                        ],
-                        "contingencias": [
-                            action.descricao for action in edited_row.acoes_contingencia if action.descricao
-                        ],
-                    }
-            log.sugestoes.append(
-                SuggestionLogEntry(
-                    slot_id=slot,
-                    categoria=info["categoria"],
-                    origem=info["origin"],
-                    id_catalogo=info["row"].id if info["origin"] == ORIGIN_CATALOG else None,
-                    posicao=info["posicao"],
-                    escolhido=info["incluido"],
-                    editado=decision.get("editado", False),
-                    proporcao_edicao=decision.get("proporcao_edicao", 0.0),
-                    texto_mostrado=texto_mostrado,
-                    texto_final=texto_final,
-                )
-            )
-
-        selected_ids = {row.id for row in selected}
-        for manual_row in st.session_state.manual_rows:
-            edited_manual = edited_by_id.get(manual_row.id, manual_row)
-            log.riscos_manuais.append(
-                ManualRiskLogEntry(
-                    id=manual_row.id,
-                    categoria=edited_manual.categoria,
-                    escolhido=manual_row.id in selected_ids,
-                    texto={
-                        "risco": edited_manual.risco,
-                        "causa": edited_manual.causa,
-                        "consequencias": [text for text in edited_manual.consequencias if text],
-                        "preventivas": [
-                            action.descricao for action in edited_manual.acoes_preventivas if action.descricao
-                        ],
-                        "contingencias": [
-                            action.descricao for action in edited_manual.acoes_contingencia if action.descricao
-                        ],
-                    },
-                )
-            )
-
-        log.totais = totals
-        log.respostas_finais = {
+    log = build_evaluation_log(
+        codigo_processo=codigo_processo,
+        idioma=LANG,
+        provedor_ia=ai_config.provider,
+        modelo_ia=ai_config.model,
+        versao_prompt=PROMPT_VERSION_V2,
+        hash_biblioteca=library_hash(DATA_PATH),
+        semente=mix_result.seed if mix_result is not None else 0,
+        nome_caso=selected_case_name,
+        experiencia=experiencia or "",
+        items_by_slot=items_by_slot,
+        review_decisions=review_decisions,
+        edited_rows=edited_rows,
+        manual_rows=st.session_state.manual_rows,
+        selected_rows=selected,
+        falhas_ia=[{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(mix_failures),
+        respostas_finais={
             "utilidade": utilidade,
             "confianca": confianca,
             "esforco": esforco,
             "comentario": comentario.strip(),
-        }
-        save_evaluation_log(log, directory=LOG_DIR, session_id=session_id)
+        },
+    )
+    log_json = json.dumps(log.to_dict(), ensure_ascii=False, indent=2)
+    session_id = st.session_state.setdefault("_session_id", uuid.uuid4().hex[:10])
+    log_filename = f"log_{safe_filename(codigo_processo or 'processo')}_{session_id}.json"
 
-        library_target = CANDIDATES_PATH if is_modo_avaliacao() else DATA_PATH
-        for row in selected:
-            if slot_origin.get(row.id) == ORIGIN_AI:
-                save_matrix_row_to_library(library_target, row, context, lang=LANG)
-
-        st.session_state._saved_fingerprint = fingerprint
-        st.rerun()
-
-    if already_saved:
-        st.success(tr("likert.saved"))
-        st.caption(tr("likert.saved_disabled_caption"))
+    st.download_button(
+        tr("likert.export_log"),
+        log_json,
+        log_filename,
+        "application/json",
+        disabled=not (codigo_processo and experiencia),
+        key="btn_export_log",
+    )
+    st.caption(tr("likert.export_caption"))

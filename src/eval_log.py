@@ -194,7 +194,117 @@ def compute_totals(
     )
 
 
-def _safe_filename(codigo_processo: str) -> str:
+def build_evaluation_log(
+    *,
+    codigo_processo: str,
+    idioma: str,
+    provedor_ia: str,
+    modelo_ia: str,
+    versao_prompt: str,
+    hash_biblioteca: str,
+    semente: int,
+    nome_caso: str | None,
+    experiencia: str,
+    items_by_slot: dict[str, dict],
+    review_decisions: dict[str, dict],
+    edited_rows: list,
+    manual_rows: list,
+    selected_rows: list,
+    falhas_ia: list[dict],
+    respostas_finais: dict,
+) -> EvaluationLog:
+    """Monta o ``EvaluationLog`` (schema v2) a partir do estado da avaliacao.
+
+    Funcao pura (sem Streamlit nem gravacao em disco), para poder testar a
+    montagem do log isoladamente e reusar tanto para salvar no servidor
+    quanto para exportar o log para o participante baixar.
+    """
+    slot_origin = {slot: info["origin"] for slot, info in items_by_slot.items()}
+    edited_by_id = {row.id: row for row in edited_rows}
+
+    log = EvaluationLog(
+        codigo_processo=codigo_processo,
+        idioma=idioma,
+        provedor_ia=provedor_ia,
+        modelo_ia=modelo_ia,
+        versao_prompt=versao_prompt,
+        hash_biblioteca=hash_biblioteca,
+        semente=semente,
+        nome_caso=nome_caso,
+        experiencia=experiencia,
+    )
+    log.falhas_ia = list(falhas_ia)
+
+    for slot, info in items_by_slot.items():
+        decision = review_decisions.get(slot, {})
+        defaults = info["defaults"]
+        texto_mostrado = {
+            "risco": defaults["risco"],
+            "causa": defaults["causa"],
+            "consequencias": [text for text in defaults["consequencias"] if text],
+            "preventivas": [action.descricao for action in defaults["preventivas"] if action.descricao],
+            "contingencias": [action.descricao for action in defaults["contingencias"] if action.descricao],
+        }
+        texto_final = None
+        if decision.get("editado"):
+            edited_row = edited_by_id.get(slot)
+            if edited_row is not None:
+                texto_final = {
+                    "risco": edited_row.risco,
+                    "causa": edited_row.causa,
+                    "consequencias": [text for text in edited_row.consequencias if text],
+                    "preventivas": [
+                        action.descricao for action in edited_row.acoes_preventivas if action.descricao
+                    ],
+                    "contingencias": [
+                        action.descricao for action in edited_row.acoes_contingencia if action.descricao
+                    ],
+                }
+        log.sugestoes.append(
+            SuggestionLogEntry(
+                slot_id=slot,
+                categoria=info["categoria"],
+                origem=info["origin"],
+                id_catalogo=info["row"].id if info["origin"] == ORIGIN_CATALOG else None,
+                posicao=info["posicao"],
+                escolhido=info["incluido"],
+                editado=decision.get("editado", False),
+                proporcao_edicao=decision.get("proporcao_edicao", 0.0),
+                texto_mostrado=texto_mostrado,
+                texto_final=texto_final,
+            )
+        )
+
+    selected_ids = {row.id for row in selected_rows}
+    for manual_row in manual_rows:
+        edited_manual = edited_by_id.get(manual_row.id, manual_row)
+        log.riscos_manuais.append(
+            ManualRiskLogEntry(
+                id=manual_row.id,
+                categoria=edited_manual.categoria,
+                escolhido=manual_row.id in selected_ids,
+                texto={
+                    "risco": edited_manual.risco,
+                    "causa": edited_manual.causa,
+                    "consequencias": [text for text in edited_manual.consequencias if text],
+                    "preventivas": [
+                        action.descricao for action in edited_manual.acoes_preventivas if action.descricao
+                    ],
+                    "contingencias": [
+                        action.descricao for action in edited_manual.acoes_contingencia if action.descricao
+                    ],
+                },
+            )
+        )
+
+    log.totais = compute_totals(items_by_slot, review_decisions, selected_rows, slot_origin)
+    log.respostas_finais = dict(respostas_finais)
+    return log
+
+
+def safe_filename(codigo_processo: str) -> str:
+    """Sanitiza ``codigo_processo`` para uso em nome de arquivo (log salvo no
+    servidor ou exportado pelo participante)."""
     cleaned = _SAFE_FILENAME_RE.sub("_", codigo_processo.strip()).strip("_")
     return (cleaned or "processo")[:80]
 
@@ -214,6 +324,6 @@ def save_evaluation_log(
     directory.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     suffix = session_id or f"{timestamp}-{uuid.uuid4().hex[:6]}"
-    path = directory / f"{_safe_filename(log.codigo_processo)}_{suffix}.json"
+    path = directory / f"{safe_filename(log.codigo_processo)}_{suffix}.json"
     path.write_text(json.dumps(log.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
     return path

@@ -6,10 +6,12 @@ from src.eval_log import (
     EvaluationLog,
     ManualRiskLogEntry,
     SuggestionLogEntry,
+    build_evaluation_log,
     compute_totals,
     edit_ratio,
     save_evaluation_log,
 )
+from src.models import ActionItem, MatrixRow
 
 
 def test_edit_ratio_is_zero_for_identical_text():
@@ -238,3 +240,187 @@ def test_save_evaluation_log_without_session_id_creates_new_file_each_time(tmp_p
     path_b = save_evaluation_log(log, directory=tmp_path)
 
     assert path_a != path_b
+
+
+def _matrix_row(id_: str, categoria: str, risco: str) -> MatrixRow:
+    return MatrixRow(
+        id=id_,
+        risco=risco,
+        categoria=categoria,
+        causa="Causa",
+        consequencias=["Consequencia"],
+        probabilidade=3,
+        impacto=3,
+        nivel="moderado",
+        estrategia="mitigar",
+        acoes_preventivas=[ActionItem("Preventiva")],
+        acoes_contingencia=[ActionItem("Contingencia")],
+    )
+
+
+def _sample_items_by_slot() -> dict:
+    return {
+        "S01": {
+            "row": MatrixRow(
+                id="R001",
+                risco="x",
+                categoria="planejamento",
+                causa="",
+                consequencias=[],
+                probabilidade=3,
+                impacto=3,
+                nivel="moderado",
+                estrategia="mitigar",
+                acoes_preventivas=[],
+                acoes_contingencia=[],
+            ),
+            "origin": ORIGIN_CATALOG,
+            "categoria": "planejamento",
+            "posicao": 1,
+            "incluido": True,
+            "defaults": {
+                "risco": "Risco original",
+                "causa": "Causa original",
+                "consequencias": ["Consequencia original"],
+                "preventivas": [ActionItem("Preventiva original")],
+                "contingencias": [ActionItem("Contingencia original")],
+            },
+        },
+        "S02": {
+            "row": MatrixRow(
+                id="",
+                risco="y",
+                categoria="planejamento",
+                causa="",
+                consequencias=[],
+                probabilidade=3,
+                impacto=3,
+                nivel="moderado",
+                estrategia="mitigar",
+                acoes_preventivas=[],
+                acoes_contingencia=[],
+            ),
+            "origin": ORIGIN_AI,
+            "categoria": "planejamento",
+            "posicao": 2,
+            "incluido": False,
+            "defaults": {
+                "risco": "Risco de IA",
+                "causa": "Causa IA",
+                "consequencias": ["Consequencia IA"],
+                "preventivas": [ActionItem("Preventiva IA")],
+                "contingencias": [ActionItem("Contingencia IA")],
+            },
+        },
+    }
+
+
+def test_build_evaluation_log_assembles_schema_v2_from_app_state():
+    items_by_slot = _sample_items_by_slot()
+    review_decisions = {"S01": {"editado": True, "proporcao_edicao": 0.3}}
+    edited_rows = [_matrix_row("S01", "planejamento", "Risco editado")]
+    manual_rows = [_matrix_row("MAN001", "selecao", "Risco manual")]
+    selected_rows = [
+        _matrix_row("S01", "planejamento", "Risco editado"),
+        _matrix_row("MAN001", "selecao", "Risco manual"),
+    ]
+
+    log = build_evaluation_log(
+        codigo_processo="PROC-1",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=7,
+        nome_caso="Caso X",
+        experiencia="2_a_5",
+        items_by_slot=items_by_slot,
+        review_decisions=review_decisions,
+        edited_rows=edited_rows,
+        manual_rows=manual_rows,
+        selected_rows=selected_rows,
+        falhas_ia=[],
+        respostas_finais={"utilidade": 4, "confianca": 5, "esforco": 2, "comentario": "ok"},
+    )
+
+    assert log.versao_schema == 2
+    assert log.codigo_processo == "PROC-1"
+    assert log.nome_caso == "Caso X"
+    assert log.experiencia == "2_a_5"
+    assert len(log.sugestoes) == 2
+
+    s01 = next(s for s in log.sugestoes if s.slot_id == "S01")
+    assert s01.origem == ORIGIN_CATALOG
+    assert s01.id_catalogo == "R001"
+    assert s01.escolhido is True
+    assert s01.editado is True
+    assert s01.texto_mostrado["risco"] == "Risco original"
+    assert s01.texto_final["risco"] == "Risco editado"
+
+    s02 = next(s for s in log.sugestoes if s.slot_id == "S02")
+    assert s02.origem == ORIGIN_AI
+    assert s02.id_catalogo is None
+    assert s02.escolhido is False
+    assert s02.editado is False
+    assert s02.texto_final is None
+
+    assert len(log.riscos_manuais) == 1
+    assert log.riscos_manuais[0].id == "MAN001"
+    assert log.riscos_manuais[0].escolhido is True
+    assert log.riscos_manuais[0].texto["risco"] == "Risco manual"
+
+    assert log.totais.tamanho_matriz_final == 2
+    assert log.totais.escolhidos_catalogo == 1
+    assert log.totais.escolhidos_manual == 1
+    assert log.respostas_finais == {"utilidade": 4, "confianca": 5, "esforco": 2, "comentario": "ok"}
+
+
+def test_build_evaluation_log_manual_risk_not_selected_is_not_escolhido():
+    items_by_slot = _sample_items_by_slot()
+    manual_rows = [_matrix_row("MAN001", "selecao", "Risco manual nao escolhido")]
+
+    log = build_evaluation_log(
+        codigo_processo="PROC-2",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=1,
+        nome_caso=None,
+        experiencia="ate_2",
+        items_by_slot=items_by_slot,
+        review_decisions={},
+        edited_rows=[],
+        manual_rows=manual_rows,
+        selected_rows=[],
+        falhas_ia=[],
+        respostas_finais={},
+    )
+
+    assert log.riscos_manuais[0].escolhido is False
+    assert log.totais.tamanho_matriz_final == 0
+
+
+def test_build_evaluation_log_records_ai_failures():
+    log = build_evaluation_log(
+        codigo_processo="PROC-3",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=1,
+        nome_caso=None,
+        experiencia="mais_5",
+        items_by_slot={},
+        review_decisions={},
+        edited_rows=[],
+        manual_rows=[],
+        selected_rows=[],
+        falhas_ia=[{"categoria": "planejamento", "erro": "timeout"}],
+        respostas_finais={},
+    )
+
+    assert log.falhas_ia == [{"categoria": "planejamento", "erro": "timeout"}]
