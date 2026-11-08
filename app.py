@@ -409,6 +409,26 @@ def render_section_label(label: str) -> None:
     st.markdown(f'<div class="dtp-section-label">{escape(label)}</div>', unsafe_allow_html=True)
 
 
+def hide_number_input_steppers(label: str) -> None:
+    """Esconde as setas +/- de um ``st.number_input`` pelo rotulo (``aria-label``).
+
+    Para valores grandes (contratacoes de centenas de milhoes de reais), subir
+    de 1 em 1 unidade de passo nao e util - so digitar o numero direto.
+    """
+    selector = f'div[data-testid="stNumberInput"]:has(input[aria-label="{escape(label)}"])'
+    st.markdown(
+        f"""
+        <style>
+        {selector} button[data-testid="stNumberInputStepUp"],
+        {selector} button[data-testid="stNumberInputStepDown"] {{
+            display: none;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 apply_dataprev_theme()
 
 
@@ -560,10 +580,10 @@ def build_context() -> tuple[ContractContext, bool, Path | None, str | None]:
         valor = st.number_input(
             tr("field.value"),
             min_value=0.0,
-            step=1000.0,
             help=tr("help.value"),
             key="ctx_valor",
         )
+        hide_number_input_steppers(tr("field.value"))
         criticidade = select(
             tr("field.criticality"),
             CRITICALITIES,
