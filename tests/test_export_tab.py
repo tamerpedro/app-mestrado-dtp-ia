@@ -91,6 +91,8 @@ def _slot_origin(at: AppTest) -> dict[str, str]:
 
 
 def _choose_one_catalog_and_one_ai_item(at: AppTest) -> AppTest:
+    """Marca um item de catalogo e um de IA, e salva a selecao e a revisao -
+    a aba Exportacao so mostra seu conteudo depois que as duas forem salvas."""
     origin = _slot_origin(at)
     checkboxes = _inclusion_checkboxes(at)
     catalog_box = next(cb for cb in checkboxes if origin.get(_slot_of_inclusion_checkbox(cb.key)) == "catalogo")
@@ -99,11 +101,24 @@ def _choose_one_catalog_and_one_ai_item(at: AppTest) -> AppTest:
     ai_box.set_value(True)
     at.run()
     assert not at.exception, at.exception
+    at.button(key="btn_save_selection").click()
+    at.run()
+    assert not at.exception, at.exception
+    at.button(key="btn_save_review").click()
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def _save_final_form(at: AppTest) -> AppTest:
+    at.button(key="btn_save_final_form").click()
+    at.run()
+    assert not at.exception, at.exception
     return at
 
 
 def _export_button(at: AppTest):
-    return next(btn for btn in at.download_button if btn.key == "btn_export_log")
+    return next((btn for btn in at.download_button if btn.key == "btn_export_log"), None)
 
 
 def test_export_button_disabled_without_process_code_or_experience():
@@ -128,7 +143,7 @@ def test_export_button_enabled_once_process_code_and_experience_are_set():
     at.run()
     at.radio(key="experiencia").set_value("2_a_5")
     at.run()
-    assert not at.exception, at.exception
+    at = _save_final_form(at)
 
     assert not _export_button(at).disabled
 
@@ -159,8 +174,50 @@ def test_export_button_enabled_again_once_consent_is_accepted():
     at.run()
     at.checkbox(key="consentimento").set_value(True)
     at.run()
+    at = _save_final_form(at)
 
     assert not _export_button(at).disabled
+
+
+def test_export_button_disabled_until_final_form_is_saved():
+    at = _choose_one_catalog_and_one_ai_item(_generate(_run()))
+
+    at.text_input(key="codigo_processo").input("PROC-001")
+    at.run()
+    at.radio(key="experiencia").set_value("2_a_5")
+    at.run()
+
+    assert _export_button(at).disabled
+    captions = [caption.value for caption in at.caption]
+    assert any("Salve o formulário final" in text for text in captions)
+
+    at = _save_final_form(at)
+
+    assert not _export_button(at).disabled
+
+
+def test_export_tab_is_locked_until_review_is_saved():
+    at = _generate(_run())
+    origin = _slot_origin(at)
+    checkboxes = _inclusion_checkboxes(at)
+    catalog_box = next(cb for cb in checkboxes if origin.get(_slot_of_inclusion_checkbox(cb.key)) == "catalogo")
+    catalog_box.set_value(True)
+    at.run()
+    at.button(key="btn_save_selection").click()
+    at.run()
+    assert not at.exception, at.exception
+
+    info_texts = [info.value for info in at.info]
+    assert any("Revisão humana" in text for text in info_texts)
+    assert not at.dataframe
+    assert not _export_button(at)
+
+    at.button(key="btn_save_review").click()
+    at.run()
+    assert not at.exception, at.exception
+
+    assert at.dataframe
+    assert _export_button(at)
 
 
 def test_result_section_shows_composition_metrics_and_reveal_table():
@@ -183,6 +240,7 @@ def test_nothing_is_written_to_disk_when_filling_and_rendering_the_final_form():
     at.run()
     at.text_area(key="likert_comentario").input("Comentario de teste")
     at.run()
+    at = _save_final_form(at)
 
     assert not at.exception, at.exception
     assert not _export_button(at).disabled

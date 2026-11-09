@@ -42,6 +42,20 @@ def _choose_items(at: AppTest, count: int = 1) -> AppTest:
         checkbox.set_value(True)
     at.run()
     assert not at.exception, at.exception
+    return _save_selection(at)
+
+
+def _save_selection(at: AppTest) -> AppTest:
+    at.button(key="btn_save_selection").click()
+    at.run()
+    assert not at.exception, at.exception
+    return at
+
+
+def _save_review(at: AppTest) -> AppTest:
+    at.button(key="btn_save_review").click()
+    at.run()
+    assert not at.exception, at.exception
     return at
 
 
@@ -67,8 +81,49 @@ def test_unchosen_items_do_not_appear_in_review():
         assert f"risco_{slot}_{generation}" not in review_keys
 
 
-def test_empty_review_shows_message_when_nothing_chosen():
+def test_review_tab_is_locked_until_selection_is_saved():
+    """Fluxo em etapas: a Revisao so mostra seu conteudo (incluindo o
+    formulario de risco manual) depois que a selecao da aba Sugestoes for
+    salva - reduz o quanto o app recalcula a cada interacao solta, que foi a
+    causa suspeita de Categoria/Probabilidade virem erradas na Exportacao."""
     at = _generate(_run())
+    for checkbox in _inclusion_checkboxes(at)[:1]:
+        checkbox.set_value(True)
+    at.run()
+    assert not at.exception, at.exception
+
+    info_texts = [info.value for info in at.info]
+    assert any("Sugestões" in text for text in info_texts)
+    assert not _review_risco_keys(at)
+    assert not any(btn.label == "Adicionar risco" for btn in at.button)
+
+    at = _save_selection(at)
+
+    assert _review_risco_keys(at)
+    success_texts = [success.value for success in at.success]
+    assert any("Seleção salva" in text for text in success_texts)
+
+
+def test_review_save_button_stores_a_snapshot_the_export_tab_reads():
+    at = _choose_items(_generate(_run()), count=1)
+    generation = _generation(at)
+    slot = next(_INCL_KEY_RE.match(cb.key).group(1) for cb in _inclusion_checkboxes(at) if cb.value)
+    risco_key = f"risco_{slot}_{generation}"
+
+    at.text_input(key=risco_key).input("Texto editado antes de salvar")
+    at.run()
+
+    at = _save_review(at)
+
+    success_texts = [success.value for success in at.success]
+    assert any("Revisão salva" in text for text in success_texts)
+    saved = at.session_state["saved_review"]
+    assert saved["generation"] == generation
+    assert any(row.risco == "Texto editado antes de salvar" for row in saved["edited_rows"])
+
+
+def test_empty_review_shows_message_when_nothing_chosen():
+    at = _save_selection(_generate(_run()))
 
     info_texts = [info.value for info in at.info]
     assert any("Sugestões" in text for text in info_texts)
@@ -157,7 +212,7 @@ def test_edit_is_measured_only_after_a_real_change_and_not_on_language_switch():
 
 
 def test_manual_risk_form_has_no_id_field_and_generates_id_automatically():
-    at = _run()
+    at = _save_selection(_run())
 
     assert not any(box.label == "ID" for box in at.text_input)
 
@@ -181,7 +236,7 @@ def test_manual_risk_appears_in_review_right_after_being_added():
     Revisao le ``manual_rows`` antes do formulario (que fica mais abaixo na
     tela) processar a submissao, entao sem forcar um rerun o item novo nao
     aparecia na mesma interacao em que foi adicionado."""
-    at = _run()
+    at = _save_selection(_run())
 
     risco_box = next(box for box in at.text_input if box.label == "Risco")
     risco_box.input("Risco manual de teste")
@@ -252,5 +307,6 @@ def test_regenerating_suggestions_does_not_leak_stale_state_into_a_reused_slot_i
 
     new_checkbox.set_value(True)
     at.run()
+    at = _save_selection(at)
     new_risco_key = f"risco_{slot}_{new_generation}"
     assert at.text_input(key=new_risco_key).value == new_row.risco

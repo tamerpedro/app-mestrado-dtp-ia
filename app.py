@@ -1134,197 +1134,240 @@ with tab1:
                     generation,
                 )
 
+    st.divider()
+    if st.button(tr("review.save_selection"), key="btn_save_selection"):
+        st.session_state["saved_selection_generation"] = generation
+    if st.session_state.get("saved_selection_generation") == generation:
+        st.success(tr("review.selection_saved"))
+
 with tab2:
     render_panel_title(tr("panel.review"))
     ensure_manual_rows()
 
-    chosen_slots = [slot for slot, info in items_by_slot.items() if info["incluido"]]
-    manual_rows = st.session_state.manual_rows
-
-    baseline_rows: list[MatrixRow] = []
+    selection_saved = st.session_state.get("saved_selection_generation") == generation
     edited_rows: list[MatrixRow] = []
 
-    if not chosen_slots and not manual_rows:
-        st.info(tr("empty.review"))
+    if not selection_saved:
+        st.info(tr("review.save_selection_first"))
     else:
-        for slot in chosen_slots:
-            info = items_by_slot[slot]
-            defaults = info["defaults"]
-            source_row = info["row"]
-            baseline_rows.append(
-                MatrixRow(
-                    id=slot,
-                    risco=defaults["risco"],
-                    categoria=info["categoria"],
-                    causa=defaults["causa"],
-                    consequencias=defaults["consequencias"],
-                    probabilidade=source_row.probabilidade,
-                    impacto=source_row.impacto,
-                    nivel=source_row.nivel,
-                    estrategia=source_row.estrategia,
-                    acoes_preventivas=defaults["preventivas"],
-                    acoes_contingencia=defaults["contingencias"],
-                    tags=source_row.tags,
+        chosen_slots = [slot for slot, info in items_by_slot.items() if info["incluido"]]
+        manual_rows = st.session_state.manual_rows
+
+        baseline_rows: list[MatrixRow] = []
+
+        if not chosen_slots and not manual_rows:
+            st.info(tr("empty.review"))
+        else:
+            for slot in chosen_slots:
+                info = items_by_slot[slot]
+                defaults = info["defaults"]
+                source_row = info["row"]
+                baseline_rows.append(
+                    MatrixRow(
+                        id=slot,
+                        risco=defaults["risco"],
+                        categoria=info["categoria"],
+                        causa=defaults["causa"],
+                        consequencias=defaults["consequencias"],
+                        probabilidade=source_row.probabilidade,
+                        impacto=source_row.impacto,
+                        nivel=source_row.nivel,
+                        estrategia=source_row.estrategia,
+                        acoes_preventivas=defaults["preventivas"],
+                        acoes_contingencia=defaults["contingencias"],
+                        tags=source_row.tags,
+                    )
                 )
-            )
-        edited_rows = edit_rows(baseline_rows + manual_rows, context, generation)
+            edited_rows = edit_rows(baseline_rows + manual_rows, context, generation)
 
-        # Medida de edicao: so para os itens escolhidos (nao para manuais), comparando
-        # com a linha-base no idioma atual - trocar de idioma sozinho nao conta como edicao.
-        review_decisions: dict[str, dict] = {}
-        for baseline, edited in zip(baseline_rows, edited_rows[: len(baseline_rows)]):
-            ratio = edit_ratio(row_text_blob(baseline), row_text_blob(edited))
-            review_decisions[baseline.id] = {"editado": ratio > 0.0, "proporcao_edicao": ratio}
-        st.session_state.review_decisions = review_decisions
+            # Medida de edicao: so para os itens escolhidos (nao para manuais), comparando
+            # com a linha-base no idioma atual - trocar de idioma sozinho nao conta como edicao.
+            review_decisions: dict[str, dict] = {}
+            for baseline, edited in zip(baseline_rows, edited_rows[: len(baseline_rows)]):
+                ratio = edit_ratio(row_text_blob(baseline), row_text_blob(edited))
+                review_decisions[baseline.id] = {"editado": ratio > 0.0, "proporcao_edicao": ratio}
+            st.session_state.review_decisions = review_decisions
 
-    add_manual_risk_form()
+        add_manual_risk_form()
+
+        st.divider()
+        if st.button(tr("review.save_review"), key="btn_save_review"):
+            st.session_state["saved_review"] = {
+                "generation": generation,
+                "edited_rows": list(edited_rows),
+                "manual_rows": list(st.session_state.manual_rows),
+                "items_by_slot": dict(items_by_slot),
+                "review_decisions": dict(st.session_state.get("review_decisions", {})),
+            }
+        saved_review = st.session_state.get("saved_review")
+        if saved_review is not None and saved_review.get("generation") == generation:
+            st.success(tr("review.review_saved"))
 
 with tab3:
     render_panel_title(tr("panel.final"))
 
-    selected = selected_rows(edited_rows)
+    saved_review = st.session_state.get("saved_review")
+    review_ready = saved_review is not None and saved_review.get("generation") == generation
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric(tr("metric.selected"), len(selected))
-    col2.metric(tr("metric.preventive"), sum(len(row.acoes_preventivas) for row in selected))
-    col3.metric(tr("metric.contingency"), sum(len(row.acoes_contingencia) for row in selected))
-    st.dataframe(final_matrix_table(selected), width="stretch", hide_index=True)
-    if LANG != DEFAULT_LANGUAGE:
-        st.caption(tr("export.pt_only"))
-
-    csv_content = to_csv(selected)
-    latex_content = to_latex(selected)
-    docx_content = to_docx(selected, context)
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.download_button(tr("download.csv"), csv_content, "matriz_riscos.csv", "text/csv")
-    with col2:
-        st.download_button(
-            tr("download.excel"),
-            rows_to_xlsx(selected),
-            "matriz_riscos.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    with col3:
-        st.download_button(tr("download.latex"), latex_content, "matriz_riscos.tex", "text/plain")
-    with col4:
-        st.download_button(
-            tr("download.word"),
-            docx_content,
-            "mapa_de_gerenciamento_de_riscos.docx",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
-
-    render_section_label(tr("result.section_title"))
-
-    slot_origin = {slot: info["origin"] for slot, info in items_by_slot.items()}
-    review_decisions = st.session_state.get("review_decisions", {})
-    totals = compute_totals(items_by_slot, review_decisions, selected, slot_origin)
-
-    if not selected:
-        st.info(tr("result.empty"))
+    if not review_ready:
+        st.info(tr("export.save_review_first"))
     else:
-        render_section_label(tr("result.reveal_title"))
-        reveal_table = [
-            {
-                tr("col.id"): row.id,
-                tr("col.risk"): row.risco,
-                tr("col.category"): category_label(row.categoria, LANG),
-                tr("result.col_origin"): tr(f"result.origin_{slot_origin.get(row.id, ORIGIN_MANUAL)}"),
-            }
-            for row in selected
-        ]
-        st.dataframe(reveal_table, width="stretch", hide_index=True)
+        saved_edited_rows = saved_review["edited_rows"]
+        saved_items_by_slot = saved_review["items_by_slot"]
+        saved_review_decisions = saved_review["review_decisions"]
+        selected = selected_rows(saved_edited_rows)
 
-        render_section_label(tr("result.composition_title"))
         col1, col2, col3 = st.columns(3)
-        col1.metric(
-            tr("result.metric_catalogo"),
-            f"{totals.escolhidos_catalogo} ({totals.participacao_catalogo_pct:g}%)",
+        col1.metric(tr("metric.selected"), len(selected))
+        col2.metric(tr("metric.preventive"), sum(len(row.acoes_preventivas) for row in selected))
+        col3.metric(tr("metric.contingency"), sum(len(row.acoes_contingencia) for row in selected))
+        st.dataframe(final_matrix_table(selected), width="stretch", hide_index=True)
+        if LANG != DEFAULT_LANGUAGE:
+            st.caption(tr("export.pt_only"))
+
+        csv_content = to_csv(selected)
+        latex_content = to_latex(selected)
+        docx_content = to_docx(selected, context)
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.download_button(tr("download.csv"), csv_content, "matriz_riscos.csv", "text/csv")
+        with col2:
+            st.download_button(
+                tr("download.excel"),
+                rows_to_xlsx(selected),
+                "matriz_riscos.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        with col3:
+            st.download_button(tr("download.latex"), latex_content, "matriz_riscos.tex", "text/plain")
+        with col4:
+            st.download_button(
+                tr("download.word"),
+                docx_content,
+                "mapa_de_gerenciamento_de_riscos.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+        render_section_label(tr("result.section_title"))
+
+        slot_origin = {slot: info["origin"] for slot, info in saved_items_by_slot.items()}
+        totals = compute_totals(saved_items_by_slot, saved_review_decisions, selected, slot_origin)
+
+        if not selected:
+            st.info(tr("result.empty"))
+        else:
+            render_section_label(tr("result.reveal_title"))
+            reveal_table = [
+                {
+                    tr("col.id"): row.id,
+                    tr("col.risk"): row.risco,
+                    tr("col.category"): category_label(row.categoria, LANG),
+                    tr("result.col_origin"): tr(f"result.origin_{slot_origin.get(row.id, ORIGIN_MANUAL)}"),
+                }
+                for row in selected
+            ]
+            st.dataframe(reveal_table, width="stretch", hide_index=True)
+
+            render_section_label(tr("result.composition_title"))
+            col1, col2, col3 = st.columns(3)
+            col1.metric(
+                tr("result.metric_catalogo"),
+                f"{totals.escolhidos_catalogo} ({totals.participacao_catalogo_pct:g}%)",
+            )
+            col2.metric(
+                tr("result.metric_ia"),
+                f"{totals.escolhidos_ia} ({totals.participacao_ia_pct:g}%)",
+            )
+            col3.metric(
+                tr("result.metric_manual"),
+                f"{totals.escolhidos_manual} ({totals.participacao_manual_pct:g}%)",
+            )
+            col4, col5, col6 = st.columns(3)
+            col4.metric(tr("result.metric_ai_adoption"), f"{totals.adocao_ia_pct:g}%")
+            col5.metric(tr("result.metric_edited_catalogo"), totals.editados_catalogo)
+            col6.metric(tr("result.metric_edited_ia"), totals.editados_ia)
+
+            render_section_label(tr("result.by_category_title"))
+            category_order = {categoria: index for index, categoria in enumerate(CATEGORIES)}
+            category_table = [
+                {
+                    tr("col.category"): category_label(cat.categoria, LANG),
+                    tr("result.metric_catalogo"): cat.escolhidos_catalogo,
+                    tr("result.metric_ia"): cat.escolhidos_ia,
+                    tr("result.metric_manual"): cat.escolhidos_manual,
+                }
+                for cat in sorted(
+                    totals.por_categoria, key=lambda cat: category_order.get(cat.categoria, len(CATEGORIES))
+                )
+            ]
+            st.dataframe(category_table, width="stretch", hide_index=True)
+
+        render_section_label(tr("final_form.title"))
+        experiencia = st.radio(
+            tr("final_form.experience"),
+            EXPERIENCE_OPTIONS,
+            format_func=lambda value: tr(f"experience.{value}"),
+            index=None,
+            key="experiencia",
         )
-        col2.metric(
-            tr("result.metric_ia"),
-            f"{totals.escolhidos_ia} ({totals.participacao_ia_pct:g}%)",
+        utilidade = st.radio(tr("likert.usefulness"), LIKERT_SCALE, horizontal=True, key="likert_utilidade")
+        confianca = st.radio(tr("likert.confidence"), LIKERT_SCALE, horizontal=True, key="likert_confianca")
+        esforco = st.radio(tr("likert.effort"), LIKERT_SCALE, horizontal=True, key="likert_esforco")
+        comentario = st.text_area(tr("likert.comment"), key="likert_comentario")
+
+        codigo_processo = (st.session_state.get("codigo_processo") or "").strip()
+        consentimento = bool(st.session_state.get("consentimento", False))
+        if not codigo_processo:
+            st.warning(tr("likert.missing_process_code"))
+        if not experiencia:
+            st.warning(tr("final_form.missing_experience"))
+
+        st.divider()
+        if st.button(tr("export.save_final_form"), key="btn_save_final_form"):
+            st.session_state["final_form_saved_generation"] = generation
+        final_form_saved = st.session_state.get("final_form_saved_generation") == generation
+        if final_form_saved:
+            st.success(tr("export.final_form_saved"))
+
+        log = build_evaluation_log(
+            codigo_processo=codigo_processo,
+            idioma=LANG,
+            provedor_ia=ai_config.provider,
+            modelo_ia=ai_config.model,
+            versao_prompt=PROMPT_VERSION_V2,
+            hash_biblioteca=library_hash(DATA_PATH),
+            semente=mix_result.seed if mix_result is not None else 0,
+            nome_caso=selected_case_name,
+            experiencia=experiencia or "",
+            items_by_slot=saved_items_by_slot,
+            review_decisions=saved_review_decisions,
+            edited_rows=saved_edited_rows,
+            manual_rows=saved_review["manual_rows"],
+            selected_rows=selected,
+            falhas_ia=[{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(mix_failures),
+            respostas_finais={
+                "utilidade": utilidade,
+                "confianca": confianca,
+                "esforco": esforco,
+                "comentario": comentario.strip(),
+            },
+            consentimento=consentimento,
         )
-        col3.metric(
-            tr("result.metric_manual"),
-            f"{totals.escolhidos_manual} ({totals.participacao_manual_pct:g}%)",
+        log_json = json.dumps(log.to_dict(), ensure_ascii=False, indent=2)
+        session_id = st.session_state.setdefault("_session_id", uuid.uuid4().hex[:10])
+        log_filename = f"log_{safe_filename(codigo_processo or 'processo')}_{session_id}.json"
+
+        st.download_button(
+            tr("likert.export_log"),
+            log_json,
+            log_filename,
+            "application/json",
+            disabled=not (codigo_processo and experiencia and consentimento and final_form_saved),
+            key="btn_export_log",
         )
-        col4, col5, col6 = st.columns(3)
-        col4.metric(tr("result.metric_ai_adoption"), f"{totals.adocao_ia_pct:g}%")
-        col5.metric(tr("result.metric_edited_catalogo"), totals.editados_catalogo)
-        col6.metric(tr("result.metric_edited_ia"), totals.editados_ia)
-
-        render_section_label(tr("result.by_category_title"))
-        category_order = {categoria: index for index, categoria in enumerate(CATEGORIES)}
-        category_table = [
-            {
-                tr("col.category"): category_label(cat.categoria, LANG),
-                tr("result.metric_catalogo"): cat.escolhidos_catalogo,
-                tr("result.metric_ia"): cat.escolhidos_ia,
-                tr("result.metric_manual"): cat.escolhidos_manual,
-            }
-            for cat in sorted(totals.por_categoria, key=lambda cat: category_order.get(cat.categoria, len(CATEGORIES)))
-        ]
-        st.dataframe(category_table, width="stretch", hide_index=True)
-
-    render_section_label(tr("final_form.title"))
-    experiencia = st.radio(
-        tr("final_form.experience"),
-        EXPERIENCE_OPTIONS,
-        format_func=lambda value: tr(f"experience.{value}"),
-        index=None,
-        key="experiencia",
-    )
-    utilidade = st.radio(tr("likert.usefulness"), LIKERT_SCALE, horizontal=True, key="likert_utilidade")
-    confianca = st.radio(tr("likert.confidence"), LIKERT_SCALE, horizontal=True, key="likert_confianca")
-    esforco = st.radio(tr("likert.effort"), LIKERT_SCALE, horizontal=True, key="likert_esforco")
-    comentario = st.text_area(tr("likert.comment"), key="likert_comentario")
-
-    codigo_processo = (st.session_state.get("codigo_processo") or "").strip()
-    consentimento = bool(st.session_state.get("consentimento", False))
-    if not codigo_processo:
-        st.warning(tr("likert.missing_process_code"))
-    if not experiencia:
-        st.warning(tr("final_form.missing_experience"))
-
-    log = build_evaluation_log(
-        codigo_processo=codigo_processo,
-        idioma=LANG,
-        provedor_ia=ai_config.provider,
-        modelo_ia=ai_config.model,
-        versao_prompt=PROMPT_VERSION_V2,
-        hash_biblioteca=library_hash(DATA_PATH),
-        semente=mix_result.seed if mix_result is not None else 0,
-        nome_caso=selected_case_name,
-        experiencia=experiencia or "",
-        items_by_slot=items_by_slot,
-        review_decisions=review_decisions,
-        edited_rows=edited_rows,
-        manual_rows=st.session_state.manual_rows,
-        selected_rows=selected,
-        falhas_ia=[{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(mix_failures),
-        respostas_finais={
-            "utilidade": utilidade,
-            "confianca": confianca,
-            "esforco": esforco,
-            "comentario": comentario.strip(),
-        },
-        consentimento=consentimento,
-    )
-    log_json = json.dumps(log.to_dict(), ensure_ascii=False, indent=2)
-    session_id = st.session_state.setdefault("_session_id", uuid.uuid4().hex[:10])
-    log_filename = f"log_{safe_filename(codigo_processo or 'processo')}_{session_id}.json"
-
-    st.download_button(
-        tr("likert.export_log"),
-        log_json,
-        log_filename,
-        "application/json",
-        disabled=not (codigo_processo and experiencia and consentimento),
-        key="btn_export_log",
-    )
-    if not consentimento:
-        st.caption(tr("consent.required_caption"))
-    st.caption(tr("likert.export_caption"))
+        if not consentimento:
+            st.caption(tr("consent.required_caption"))
+        elif not final_form_saved:
+            st.caption(tr("export.save_required_caption"))
+        st.caption(tr("likert.export_caption"))

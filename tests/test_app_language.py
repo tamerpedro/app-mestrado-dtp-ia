@@ -39,10 +39,14 @@ def _generate(at: AppTest) -> AppTest:
 
 
 def _choose_items(at: AppTest, count: int = 2) -> AppTest:
-    """Marca os primeiros itens da aba Sugestoes, para aparecerem editaveis
-    na aba Revisao (onde a edicao de fato acontece desde a Parte 2)."""
+    """Marca os primeiros itens da aba Sugestoes e salva a selecao, para
+    aparecerem editaveis na aba Revisao (onde a edicao de fato acontece
+    desde a Parte 2; a Revisao so libera depois que a selecao e salva)."""
     for checkbox in _inclusion_checkboxes(at)[:count]:
         checkbox.set_value(True)
+    at.run()
+    assert not at.exception, at.exception
+    at.button(key="btn_save_selection").click()
     at.run()
     assert not at.exception, at.exception
     return at
@@ -84,7 +88,7 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
     at.run()
     assert not at.exception, at.exception
 
-    _choose_items(at, count=1)
+    at = _choose_items(at, count=1)
     first_prob = sorted(_prob_boxes(at))[0]
     _box(at, first_prob).select(5)
     at.run()
