@@ -514,6 +514,117 @@ def test_build_evaluation_log_tracks_unchecked_inclusion_and_category_changes():
     assert log_consistency_errors(log.to_dict()) == []
 
 
+def test_build_evaluation_log_tracks_avaliacao_changes_and_totals():
+    """avaliacao_mostrada/avaliacao_final/avaliacao_alterada cobrem so
+    probabilidade/impacto/estrategia - independente de categoria_alterada
+    (que cobre a categoria) e de editado/proporcao_edicao (que cobrem so
+    texto)."""
+    items_by_slot = {
+        "S01": {
+            "row": MatrixRow(
+                id="R001", risco="x", categoria="planejamento", causa="", consequencias=[],
+                probabilidade=2, impacto=2, nivel="baixo", estrategia="mitigate",
+                acoes_preventivas=[], acoes_contingencia=[],
+            ),
+            "origin": ORIGIN_CATALOG,
+            "categoria": "planejamento",
+            "posicao": 1,
+            "incluido": True,
+            "defaults": {
+                "risco": "Risco original", "causa": "", "consequencias": [], "preventivas": [], "contingencias": [],
+            },
+        },
+        "S02": {
+            "row": MatrixRow(
+                id="", risco="y", categoria="planejamento", causa="", consequencias=[],
+                probabilidade=3, impacto=3, nivel="moderado", estrategia="mitigate",
+                acoes_preventivas=[], acoes_contingencia=[],
+            ),
+            "origin": ORIGIN_AI,
+            "categoria": "planejamento",
+            "posicao": 2,
+            "incluido": True,
+            "defaults": {
+                "risco": "Risco IA", "causa": "", "consequencias": [], "preventivas": [], "contingencias": [],
+            },
+        },
+    }
+    s01_edited = _matrix_row("S01", "planejamento", "Risco editado")
+    s01_edited.probabilidade = 4
+    s01_edited.impacto = 2  # nao muda, so probabilidade e estrategia mudam
+    s01_edited.estrategia = "accept"
+    s02_edited = _matrix_row("S02", "planejamento", "Risco IA editado")
+    s02_edited.probabilidade = 3
+    s02_edited.impacto = 3
+    s02_edited.estrategia = "mitigate"
+    edited_rows = [s01_edited, s02_edited]
+    selected_rows = list(edited_rows)
+
+    log = build_evaluation_log(
+        codigo_processo="PROC-10",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=1,
+        nome_caso=None,
+        experiencia="mais_5",
+        items_by_slot=items_by_slot,
+        review_decisions={},
+        edited_rows=edited_rows,
+        manual_rows=[],
+        selected_rows=selected_rows,
+        falhas_ia=[],
+        respostas_finais={},
+    )
+
+    s01 = next(s for s in log.sugestoes if s.slot_id == "S01")
+    assert s01.avaliacao_mostrada == {"probabilidade": 2, "impacto": 2, "estrategia": "mitigate"}
+    assert s01.avaliacao_final == {"probabilidade": 4, "impacto": 2, "estrategia": "accept"}
+    assert s01.avaliacao_alterada is True
+    # categoria nao mudou - os dois sinais sao independentes.
+    assert s01.categoria_alterada is False
+
+    s02 = next(s for s in log.sugestoes if s.slot_id == "S02")
+    assert s02.avaliacao_mostrada == {"probabilidade": 3, "impacto": 3, "estrategia": "mitigate"}
+    assert s02.avaliacao_final == {"probabilidade": 3, "impacto": 3, "estrategia": "mitigate"}
+    assert s02.avaliacao_alterada is False
+
+    assert log.totais.avaliacao_alterada_catalogo == 1
+    assert log.totais.avaliacao_alterada_ia == 0
+    assert log_consistency_errors(log.to_dict()) == []
+
+
+def test_build_evaluation_log_avaliacao_final_is_none_when_not_included_in_matrix():
+    items_by_slot = _sample_items_by_slot()
+
+    log = build_evaluation_log(
+        codigo_processo="PROC-11",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=1,
+        nome_caso=None,
+        experiencia="mais_5",
+        items_by_slot=items_by_slot,
+        review_decisions={},
+        edited_rows=[],
+        manual_rows=[],
+        selected_rows=[],
+        falhas_ia=[],
+        respostas_finais={},
+    )
+
+    s02 = next(s for s in log.sugestoes if s.slot_id == "S02")
+    assert s02.incluido_matriz is False
+    assert s02.avaliacao_mostrada == {"probabilidade": 3, "impacto": 3, "estrategia": "mitigar"}
+    assert s02.avaliacao_final is None
+    assert s02.avaliacao_alterada is False
+
+
 def test_build_evaluation_log_records_ai_failures():
     log = build_evaluation_log(
         codigo_processo="PROC-3",

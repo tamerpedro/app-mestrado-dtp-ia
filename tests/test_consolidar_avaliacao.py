@@ -19,6 +19,8 @@ def _sample_log(
     mostrados_ia: int = 3,
     riscos_manuais: int = 1,
     versao_schema: int = 2,
+    avaliacao_alterada_catalogo: int = 0,
+    avaliacao_alterada_ia: int = 0,
 ) -> dict:
     tamanho = escolhidos_catalogo + escolhidos_ia + escolhidos_manual
 
@@ -52,6 +54,8 @@ def _sample_log(
             "adocao_ia_pct": round(escolhidos_ia / mostrados_ia * 100, 1) if mostrados_ia else 0.0,
             "editados_catalogo": 1,
             "editados_ia": 0,
+            "avaliacao_alterada_catalogo": avaliacao_alterada_catalogo,
+            "avaliacao_alterada_ia": avaliacao_alterada_ia,
             "por_categoria": [
                 {
                     "categoria": "planejamento",
@@ -67,7 +71,7 @@ def _sample_log(
 
 
 def test_process_summary_row_reads_totals_and_answers():
-    log = _sample_log("P1")
+    log = _sample_log("P1", avaliacao_alterada_catalogo=2, avaliacao_alterada_ia=1)
 
     row = consolidar_avaliacao.process_summary_row(log)
 
@@ -79,6 +83,8 @@ def test_process_summary_row_reads_totals_and_answers():
     assert row["escolhidos_ia"] == 1
     assert row["escolhidos_manual"] == 1
     assert row["riscos_manuais"] == 1
+    assert row["avaliacao_alterada_catalogo"] == 2
+    assert row["avaliacao_alterada_ia"] == 1
     assert row["utilidade"] == 4
     assert row["comentario"] == "ok"
 

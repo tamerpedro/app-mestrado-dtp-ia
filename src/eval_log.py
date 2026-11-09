@@ -53,6 +53,9 @@ class SuggestionLogEntry:
     incluido_matriz: bool = False  # escolhido E com "Incluir na matriz" marcado na Revisao
     categoria_final: str | None = None  # "Categoria no mapa" na Revisao; None se nao entrou na matriz
     categoria_alterada: bool = False  # so avaliado quando incluido_matriz (categoria_final != categoria)
+    avaliacao_mostrada: dict = field(default_factory=dict)  # {probabilidade, impacto, estrategia} como mostrado
+    avaliacao_final: dict | None = None  # {probabilidade, impacto, estrategia} na Revisao; so quando incluido_matriz
+    avaliacao_alterada: bool = False  # so avaliado quando incluido_matriz (avaliacao_final != avaliacao_mostrada)
 
 
 @dataclass
@@ -91,6 +94,8 @@ class EvaluationTotals:
     adocao_ia_pct: float = 0.0  # escolhidos_ia / mostrados_ia * 100
     editados_catalogo: int = 0
     editados_ia: int = 0
+    avaliacao_alterada_catalogo: int = 0  # probabilidade/impacto/estrategia mudou na Revisao (so incluidos na matriz)
+    avaliacao_alterada_ia: int = 0
     por_categoria: list[CategoryTotals] = field(default_factory=list)
 
 
@@ -168,6 +173,20 @@ def compute_totals(
         if decision.get("editado") and slot_origin.get(slot) == ORIGIN_AI
     )
 
+    def avaliacao_alterada(row) -> bool:
+        baseline_info = items_by_slot.get(row.id)
+        baseline_row = baseline_info.get("row") if baseline_info else None
+        if baseline_row is None:
+            return False
+        mostrada = (baseline_row.probabilidade, baseline_row.impacto, baseline_row.estrategia)
+        final = (row.probabilidade, row.impacto, row.estrategia)
+        return mostrada != final
+
+    avaliacao_alterada_catalogo = sum(
+        1 for row in selected_rows if origin_of(row) == ORIGIN_CATALOG and avaliacao_alterada(row)
+    )
+    avaliacao_alterada_ia = sum(1 for row in selected_rows if origin_of(row) == ORIGIN_AI and avaliacao_alterada(row))
+
     categorias = sorted({info["categoria"] for info in items_by_slot.values()} | {row.categoria for row in selected_rows})
     por_categoria = []
     for categoria in categorias:
@@ -197,6 +216,8 @@ def compute_totals(
         adocao_ia_pct=round(escolhidos_ia / mostrados_ia * 100, 1) if mostrados_ia else 0.0,
         editados_catalogo=editados_catalogo,
         editados_ia=editados_ia,
+        avaliacao_alterada_catalogo=avaliacao_alterada_catalogo,
+        avaliacao_alterada_ia=avaliacao_alterada_ia,
         por_categoria=por_categoria,
     )
 
@@ -275,6 +296,20 @@ def build_evaluation_log(
         incluido_matriz = bool(edited_row.selecionado) if edited_row is not None else False
         categoria_final = edited_row.categoria if incluido_matriz and edited_row is not None else None
         categoria_alterada = incluido_matriz and categoria_final != info["categoria"]
+        baseline_row = info["row"]
+        avaliacao_mostrada = {
+            "probabilidade": baseline_row.probabilidade,
+            "impacto": baseline_row.impacto,
+            "estrategia": baseline_row.estrategia,
+        }
+        avaliacao_final = None
+        if incluido_matriz and edited_row is not None:
+            avaliacao_final = {
+                "probabilidade": edited_row.probabilidade,
+                "impacto": edited_row.impacto,
+                "estrategia": edited_row.estrategia,
+            }
+        avaliacao_alterada = incluido_matriz and avaliacao_final != avaliacao_mostrada
         log.sugestoes.append(
             SuggestionLogEntry(
                 slot_id=slot,
@@ -290,6 +325,9 @@ def build_evaluation_log(
                 incluido_matriz=incluido_matriz,
                 categoria_final=categoria_final,
                 categoria_alterada=categoria_alterada,
+                avaliacao_mostrada=avaliacao_mostrada,
+                avaliacao_final=avaliacao_final,
+                avaliacao_alterada=avaliacao_alterada,
             )
         )
 
