@@ -103,7 +103,7 @@ def select(label: str, options: list, *, key: str, format_func, index: int = 0, 
     return value
 
 
-def library_text(widget, label: str, default: str, *, key: str) -> str:
+def library_text(widget, label: str, default: str, *, key: str, allow_empty: bool = True) -> str:
     """Campo de texto preenchido pela biblioteca de riscos.
 
     Enquanto o usuario nao editar, o texto acompanha o idioma (o ``default``
@@ -112,6 +112,15 @@ def library_text(widget, label: str, default: str, *, key: str) -> str:
     marcar de novo na Revisao). O Streamlit limpa o estado de um widget que
     nao e desenhado numa rodada; por isso guardamos uma copia "sticky" fora
     do ciclo de vida do widget, para restaurar quando ele reaparecer.
+
+    ``allow_empty=False`` e para campos que nunca devem ficar em branco
+    (Risco, Causa): se o valor guardado estiver vazio e houver um ``default``
+    nao vazio, o campo volta a mostrar o default em vez de ficar travado em
+    branco. Sem isso, qualquer esvaziamento acidental do campo (ex.: um
+    valor transitorio vazio enviado pelo navegador numa interacao rapida)
+    fica "colado" em branco para sempre, mesmo desmarcando e marcando o item
+    de novo - foi exatamente o bug relatado onde o Risco/Causa de um item
+    selecionado aparecia em branco na Revisao e na Exportacao.
     """
     sticky = st.session_state.setdefault("_sticky_text", {})
     if key not in st.session_state and key in sticky:
@@ -119,7 +128,10 @@ def library_text(widget, label: str, default: str, *, key: str) -> str:
     seed_key = f"{key}__seed"
     seed = st.session_state.get(seed_key)
     untouched = key in st.session_state and st.session_state[key] == seed
-    if key not in st.session_state or (untouched and default != seed):
+    cleared_but_required = (
+        not allow_empty and key in st.session_state and not st.session_state[key].strip() and default
+    )
+    if key not in st.session_state or (untouched and default != seed) or cleared_but_required:
         st.session_state[key] = default
     st.session_state[seed_key] = default
     value = widget(label, key=key)
@@ -905,8 +917,12 @@ def edit_rows(rows: list[MatrixRow], context: ContractContext, generation: int) 
                         key=f"estrategia_{risk_key}",
                     )
 
-                    risco = library_text(st.text_input, tr("field.risk"), row.risco, key=f"risco_{risk_key}")
-                    causa = library_text(st.text_area, tr("field.cause"), row.causa, key=f"causa_{risk_key}")
+                    risco = library_text(
+                        st.text_input, tr("field.risk"), row.risco, key=f"risco_{risk_key}", allow_empty=False
+                    )
+                    causa = library_text(
+                        st.text_area, tr("field.cause"), row.causa, key=f"causa_{risk_key}", allow_empty=False
+                    )
                     render_section_label(tr("section.consequences"))
                     consequencias = edit_text_items(risk_key, "consequence", row.consequencias)
                     render_section_label(tr("section.preventive"))

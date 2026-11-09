@@ -96,6 +96,40 @@ def test_edits_are_preserved_when_unchecking_and_rechecking():
     assert at.text_input(key=risco_key).value == "Texto editado na revisão"
 
 
+def test_clearing_risco_or_causa_does_not_get_stuck_blank():
+    """Bug real reportado pelo usuario: um item escolhido na Sugestoes
+    aparecia com Risco e Causa em branco na Revisao e na Exportacao, mesmo
+    desmarcando e marcando o item de novo - o texto original (correto) so
+    aparecia no titulo do expander (que nao e um widget), nunca na caixa de
+    edicao. Risco e Causa nunca deveriam poder ficar travados em branco: se
+    o campo for esvaziado (de proposito ou por um valor transitorio vazio
+    enviado pelo navegador), ele deve voltar a mostrar o texto original."""
+    at = _choose_items(_generate(_run()), count=1)
+    generation = _generation(at)
+    slot = next(_INCL_KEY_RE.match(cb.key).group(1) for cb in _inclusion_checkboxes(at) if cb.value)
+    risco_key = f"risco_{slot}_{generation}"
+    causa_key = f"causa_{slot}_{generation}"
+    original_risco = at.text_input(key=risco_key).value
+    original_causa = at.text_area(key=causa_key).value
+    assert original_risco and original_causa
+
+    at.text_input(key=risco_key).input("")
+    at.text_area(key=causa_key).input("")
+    at.run()
+    assert not at.exception, at.exception
+
+    assert at.text_input(key=risco_key).value == original_risco
+    assert at.text_area(key=causa_key).value == original_causa
+
+    at.checkbox(key=f"incl_{slot}_{generation}").set_value(False)
+    at.run()
+    at.checkbox(key=f"incl_{slot}_{generation}").set_value(True)
+    at.run()
+    assert not at.exception, at.exception
+    assert at.text_input(key=risco_key).value == original_risco
+    assert at.text_area(key=causa_key).value == original_causa
+
+
 def test_edit_is_measured_only_after_a_real_change_and_not_on_language_switch():
     at = _choose_items(_generate(_run()), count=1)
     generation = _generation(at)
@@ -197,9 +231,9 @@ def test_regenerating_suggestions_does_not_leak_stale_state_into_a_reused_slot_i
     slot = next(_INCL_KEY_RE.match(cb.key).group(1) for cb in _inclusion_checkboxes(at) if cb.value)
     risco_key = f"risco_{slot}_{generation}"
 
-    at.text_input(key=risco_key).input("")
+    at.text_input(key=risco_key).input("Texto da rodada antiga")
     at.run()
-    assert at.text_input(key=risco_key).value == ""
+    assert at.text_input(key=risco_key).value == "Texto da rodada antiga"
 
     original_risco = _row_for_slot(at, slot).risco
     for _ in range(20):
