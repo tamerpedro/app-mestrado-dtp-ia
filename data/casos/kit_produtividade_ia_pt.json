@@ -1,0 +1,184 @@
+{
+  "planejamento": [
+    {
+      "titulo": "Ausência de estratégia de distribuição logística entre unidades",
+      "causa": "Planejamento insuficiente da distribuição geográfica das entregas, dos locais de recebimento e das responsabilidades pelo transporte até as unidades descentralizadas",
+      "consequencia": "Entregas descoordenadas, extravio ou avarias de bens, custos adicionais não previstos e atraso na renovação dos postos de trabalho",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Mapear as unidades atendidas, definir no termo de referência os locais, prazos e condições de entrega parcelada e designar recebedores em cada localidade",
+      "acao_contingencia": "Renegociar o cronograma de entregas com o fornecedor e centralizar temporariamente o recebimento para redistribuição interna",
+      "responsavel_sugerido": "Equipe de planejamento da contratação e área de logística"
+    },
+    {
+      "titulo": "Levantamento inadequado do parque a ser substituído",
+      "causa": "Inventário desatualizado ou sem critérios objetivos para definir quais itens devem ser substituídos e quais perfis de uso existem",
+      "consequencia": "Compra de itens em excesso ou em falta, desperdício de recursos e necessidade de nova contratação para complementar a demanda",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Atualizar o inventário com as unidades regionais, definir critérios de substituição e validar o quantitativo por perfil de usuário antes da aprovação do termo de referência",
+      "acao_contingencia": "Ajustar os quantitativos por meio dos pedidos subsequentes da ata de registro de preços e redistribuir itens excedentes entre unidades",
+      "responsavel_sugerido": "Área demandante e equipe de suporte técnico"
+    },
+    {
+      "titulo": "Modelagem inadequada das condições de garantia e reposição",
+      "causa": "Falta de definição clara no planejamento sobre prazo, abrangência, local de atendimento e procedimento de troca de itens defeituosos nas unidades regionais",
+      "consequencia": "Dificuldade de acionar a garantia, demora na reposição de itens defeituosos e aumento de custos de manutenção para a administração",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Detalhar no termo de referência o prazo de garantia, o fluxo de acionamento, os prazos de substituição e a cobertura em todas as localidades atendidas",
+      "acao_contingencia": "Formalizar notificação ao fornecedor para cumprimento da garantia e utilizar estoque de reserva para reposição imediata",
+      "responsavel_sugerido": "Gestor da contratação e equipe de planejamento"
+    }
+  ],
+  "selecao": [
+    {
+      "titulo": "Proposta vencedora com preço inexequível",
+      "causa": "Disputa por menor preço com lances agressivos, sem análise adequada da composição de custos e da exequibilidade da proposta",
+      "consequencia": "Entrega de itens de qualidade inferior, pedidos de reequilíbrio, inadimplemento das obrigações e necessidade de nova licitação",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Definir no edital critérios objetivos de aferição de exequibilidade, exigir planilha de custos detalhada e realizar diligências sobre as propostas mais baixas",
+      "acao_contingencia": "Desclassificar a proposta inexequível, convocar o licitante subsequente e aplicar as sanções previstas",
+      "responsavel_sugerido": "Pregoeiro e equipe de apoio"
+    },
+    {
+      "titulo": "Aceitação de proposta ou amostra em desconformidade com as especificações",
+      "causa": "Análise técnica superficial das propostas, ausência de critérios objetivos de avaliação ou de exigência de amostras e laudos antes da adjudicação",
+      "consequencia": "Adjudicação a licitante com produto inadequado, recusa posterior dos itens, retrabalho e atrasos na renovação dos equipamentos",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Prever no edital análise de amostras ou de documentação técnica com critérios objetivos de aceitação e apoio da área técnica no julgamento",
+      "acao_contingencia": "Recusar o produto e desclassificar o licitante, convocando o seguinte na ordem de classificação ou republicando o certame",
+      "responsavel_sugerido": "Equipe técnica da contratação"
+    },
+    {
+      "titulo": "Fornecedor vencedor sem capacidade logística para atendimento descentralizado",
+      "causa": "Habilitação que não avalia a capacidade de entrega e de atendimento em garantia em múltiplas localidades, com adesão de licitantes sem estrutura de distribuição ou assistência",
+      "consequencia": "Entregas parciais ou atrasadas, dificuldade de acionar a garantia nas unidades regionais e descumprimento do contrato",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Exigir atestados de capacidade técnico-operacional compatíveis, declaração de rede de distribuição e assistência e prever cobertura geográfica no edital",
+      "acao_contingencia": "Notificar e sancionar o fornecedor, convocar o cadastro reserva da ata e redistribuir as demandas pendentes",
+      "responsavel_sugerido": "Gestor da contratação e comissão de licitação"
+    }
+  ],
+  "gestao": [
+    {
+      "titulo": "Gestão inadequada das entregas parceladas e do saldo da ata",
+      "causa": "Falta de controle centralizado dos pedidos, das entregas e do saldo registrado entre as unidades participantes",
+      "consequencia": "Pedidos em duplicidade, saldo esgotado ou não utilizado e distribuição desigual dos bens entre as unidades",
+      "probabilidade_padrao": 4,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Manter painel de controle de pedidos, entregas e saldo, com ordem de fornecimento padronizada e responsáveis definidos por unidade",
+      "acao_contingencia": "Realizar conciliação imediata do saldo, redistribuir os itens entre as unidades e remanejar as demandas pendentes",
+      "responsavel_sugerido": "Gestor do contrato"
+    },
+    {
+      "titulo": "Dificuldade de acionamento da garantia após o recebimento",
+      "causa": "Canal de atendimento e prazos de substituição pouco definidos, e falta de registro dos bens recebidos e dos lotes entregues",
+      "consequencia": "Bens defeituosos sem reposição tempestiva, inutilização dos itens e perda do direito à garantia",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Definir no contrato canal único de acionamento, prazos de reposição e penalidades, e manter registro dos bens por lote e unidade",
+      "acao_contingencia": "Notificar formalmente a contratada, aplicar as sanções previstas e acionar a garantia contratual ou o saldo de bens reservados",
+      "responsavel_sugerido": "Fiscal técnico do contrato"
+    },
+    {
+      "titulo": "Recebimento descentralizado sem padronização de conferência",
+      "causa": "Unidades regionais sem procedimento uniforme de conferência, registro de divergências e comunicação ao fiscal",
+      "consequencia": "Aceite de itens fora da especificação ou em quantidade incorreta, e atesto indevido de pagamentos",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Elaborar roteiro padrão de recebimento e capacitar os fiscais ou recebedores locais, com modelo único de termo de recebimento",
+      "acao_contingencia": "Suspender o atesto, registrar a divergência e exigir da contratada a correção ou a substituição dos itens",
+      "responsavel_sugerido": "Fiscal administrativo do contrato"
+    }
+  ],
+  "solucao": [
+    {
+      "titulo": "Heterogeneidade de modelos entre lotes entregues",
+      "causa": "Fornecimento parcelado ao longo da vigência sem exigência de padronização de modelo, versão ou revisão de hardware entre as entregas",
+      "consequencia": "Diferenças de desempenho, de driver e de ergonomia entre os postos, com aumento do esforço de suporte e de gestão do parque",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Exigir equivalência técnica comprovada entre lotes, vedar troca de modelo sem aprovação prévia e prever amostra de referência no edital",
+      "acao_contingencia": "Rejeitar itens divergentes da amostra aprovada e exigir substituição pelo modelo homologado",
+      "responsavel_sugerido": "Gestor do contrato / Equipe técnica de infraestrutura"
+    },
+    {
+      "titulo": "Baixa durabilidade e qualidade construtiva dos itens fornecidos",
+      "causa": "Critérios de qualidade, durabilidade e resistência insuficientes na especificação e aceitação baseada apenas no menor preço",
+      "consequencia": "Falhas precoces, aumento de chamados de garantia e retorno da necessidade de substituição antes do ciclo previsto",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Definir requisitos mínimos de durabilidade e certificações aplicáveis, exigir amostras e testes de bancada antes da homologação",
+      "acao_contingencia": "Acionar a garantia para troca imediata dos itens defeituosos e aplicar as sanções contratuais cabíveis",
+      "responsavel_sugerido": "Equipe de planejamento da contratação / Fiscal técnico"
+    },
+    {
+      "titulo": "Logística de garantia ineficiente em unidades descentralizadas",
+      "causa": "Garantia sem definição clara de prazos de atendimento, forma de troca e cobertura geográfica para unidades distantes",
+      "consequencia": "Postos de trabalho parados por longos períodos, retrabalho dos fiscais e custos adicionais de envio e reposição",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 2,
+      "acao_preventiva": "Prever no termo de referência prazos de troca, atendimento em todas as localidades e canal único de abertura de chamados, com níveis de serviço e penalidades",
+      "acao_contingencia": "Utilizar estoque reserva local para reposição imediata e cobrar da contratada o ressarcimento dos custos de logística",
+      "responsavel_sugerido": "Fiscal administrativo / Gestor do contrato"
+    }
+  ],
+  "instalacao": [
+    {
+      "titulo": "Entregas parceladas sem coordenação logística com as unidades de destino",
+      "causa": "Ausência de cronograma e de pontos focais definidos para o recebimento e a distribuição dos itens em locais geograficamente dispersos, com entregas parceladas",
+      "consequencia": "Itens recebidos em local ou momento inadequado, extravio ou avaria em trânsito e substituição de equipamentos atrasada ou incompleta nas unidades",
+      "probabilidade_padrao": 4,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Definir no termo de referência o plano de entrega por unidade, com pontos focais, janelas de recebimento, identificação dos volumes e responsabilidade da contratada pelo transporte até o destino",
+      "acao_contingencia": "Reprogramar as entregas com a contratada, redirecionar volumes para unidades próximas e registrar as ocorrências para reposição imediata dos itens avariados ou extraviados",
+      "responsavel_sugerido": "Gestor do contrato e equipe de logística das unidades"
+    },
+    {
+      "titulo": "Substituição de periféricos sem inventário e registro adequados dos postos",
+      "causa": "Falta de levantamento prévio dos postos a atender, de procedimento padronizado de troca e de atualização do inventário durante a instalação pelas equipes de suporte",
+      "consequencia": "Postos atendidos em duplicidade ou não atendidos, itens desgastados sem destinação correta, controle patrimonial deficiente e retrabalho do suporte técnico",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Elaborar inventário dos postos a atender, definir roteiro de substituição com checklist de teste e registrar cada troca no sistema de patrimônio, com destinação dos itens substituídos",
+      "acao_contingencia": "Realizar conferência por amostragem nas unidades, corrigir os registros patrimoniais e reprogramar o atendimento dos postos omitidos ou duplicados",
+      "responsavel_sugerido": "Equipe de suporte técnico e setor de patrimônio"
+    }
+  ],
+  "cronograma": [
+    {
+      "titulo": "Entregas parceladas desalinhadas com a demanda das unidades",
+      "causa": "Ausência de calendário de remessas pactuado com as unidades regionais e planejamento deficiente das solicitações ao longo da vigência da ata",
+      "consequencia": "Concentração de pedidos em curto período, acúmulo de entregas fora de ordem e atraso na renovação dos postos de trabalho",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Elaborar cronograma de demandas com as unidades requisitantes e fixar no termo de referência prazos e janelas de entrega por remessa",
+      "acao_contingencia": "Reprogramar as remessas com o fornecedor, priorizar as unidades mais críticas e redistribuir o estoque disponível",
+      "responsavel_sugerido": "Gestor da ata de registro de preços"
+    },
+    {
+      "titulo": "Atraso na validação de amostras ou lotes recebidos",
+      "causa": "Ausência de rotina e de equipe definidas para conferência e aceite, com procedimentos de teste e recebimento nas unidades pouco claros",
+      "consequencia": "Atraso no recebimento definitivo, na liberação de novos pedidos e no pagamento, com impacto no cronograma de distribuição",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 2,
+      "acao_preventiva": "Definir prazos e critérios de recebimento no edital, designar fiscais locais e padronizar o roteiro de conferência",
+      "acao_contingencia": "Reforçar temporariamente a equipe de conferência e adotar recebimento por amostragem, conforme previsto contratualmente",
+      "responsavel_sugerido": "Fiscal técnico do contrato"
+    },
+    {
+      "titulo": "Atraso na substituição de itens defeituosos durante a garantia",
+      "causa": "Prazos e fluxos de abertura de chamado e de troca imprecisos, e logística reversa deficiente em unidades distantes",
+      "consequencia": "Postos de trabalho ficam sem periféricos por períodos prolongados, afetando a produtividade e atrasando a conclusão da renovação",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 2,
+      "acao_preventiva": "Estabelecer prazos máximos de reposição, canal único de atendimento e sanções para descumprimento no instrumento contratual",
+      "acao_contingencia": "Utilizar estoque reserva da instituição para reposição imediata e aplicar as penalidades contratuais cabíveis ao fornecedor",
+      "responsavel_sugerido": "Gestor do contrato"
+    }
+  ]
+}
