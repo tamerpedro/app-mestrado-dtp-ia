@@ -537,6 +537,56 @@ def test_build_evaluation_log_records_ai_failures():
     assert log.falhas_ia == [{"categoria": "planejamento", "erro": "timeout"}]
 
 
+def test_build_evaluation_log_defaults_consentimento_to_false():
+    log = build_evaluation_log(
+        codigo_processo="PROC-8",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=1,
+        nome_caso=None,
+        experiencia="mais_5",
+        items_by_slot={},
+        review_decisions={},
+        edited_rows=[],
+        manual_rows=[],
+        selected_rows=[],
+        falhas_ia=[],
+        respostas_finais={},
+    )
+
+    assert log.consentimento is False
+    assert log.versao_schema == 2
+
+
+def test_build_evaluation_log_records_consentimento_when_accepted():
+    log = build_evaluation_log(
+        codigo_processo="PROC-9",
+        idioma="pt",
+        provedor_ia="anthropic",
+        modelo_ia="claude-test",
+        versao_prompt="v2",
+        hash_biblioteca="abc123",
+        semente=1,
+        nome_caso=None,
+        experiencia="mais_5",
+        items_by_slot={},
+        review_decisions={},
+        edited_rows=[],
+        manual_rows=[],
+        selected_rows=[],
+        falhas_ia=[],
+        respostas_finais={},
+        consentimento=True,
+    )
+
+    assert log.consentimento is True
+    assert log.versao_schema == 2
+    assert log.to_dict()["consentimento"] is True
+
+
 def test_log_consistency_errors_is_empty_for_a_freshly_built_log():
     log = build_evaluation_log(
         codigo_processo="PROC-5",

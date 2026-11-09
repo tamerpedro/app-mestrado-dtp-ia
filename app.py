@@ -579,6 +579,8 @@ def render_case_selector() -> tuple[Path | None, str | None]:
 
 def build_context() -> tuple[ContractContext, bool, Path | None, str | None]:
     with st.sidebar:
+        st.info(tr("consent.notice"))
+        consentimento = st.checkbox(tr("consent.checkbox"), key="consentimento")
         st.markdown(
             f"""
             <div class="dtp-sidebar-brand">
@@ -630,7 +632,11 @@ def build_context() -> tuple[ContractContext, bool, Path | None, str | None]:
             help=tr("help.context"),
             key="ctx_contexto",
         )
-        generate_clicked = st.button(tr("action.generate"), type="primary", key="btn_generate_suggestions")
+        generate_clicked = st.button(
+            tr("action.generate"), type="primary", key="btn_generate_suggestions", disabled=not consentimento
+        )
+        if not consentimento:
+            st.caption(tr("consent.required_caption"))
     context = ContractContext(
         objeto=objeto,
         tipo_contratacao=tipo,
@@ -1261,6 +1267,7 @@ with tab3:
     comentario = st.text_area(tr("likert.comment"), key="likert_comentario")
 
     codigo_processo = (st.session_state.get("codigo_processo") or "").strip()
+    consentimento = bool(st.session_state.get("consentimento", False))
     if not codigo_processo:
         st.warning(tr("likert.missing_process_code"))
     if not experiencia:
@@ -1288,6 +1295,7 @@ with tab3:
             "esforco": esforco,
             "comentario": comentario.strip(),
         },
+        consentimento=consentimento,
     )
     log_json = json.dumps(log.to_dict(), ensure_ascii=False, indent=2)
     session_id = st.session_state.setdefault("_session_id", uuid.uuid4().hex[:10])
@@ -1298,7 +1306,9 @@ with tab3:
         log_json,
         log_filename,
         "application/json",
-        disabled=not (codigo_processo and experiencia),
+        disabled=not (codigo_processo and experiencia and consentimento),
         key="btn_export_log",
     )
+    if not consentimento:
+        st.caption(tr("consent.required_caption"))
     st.caption(tr("likert.export_caption"))

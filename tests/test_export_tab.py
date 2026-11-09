@@ -62,6 +62,10 @@ def _run() -> AppTest:
 
 
 def _generate(at: AppTest) -> AppTest:
+    consentimento = at.checkbox(key="consentimento")
+    if not consentimento.value:
+        consentimento.set_value(True)
+        at.run()
     at.button(key="btn_generate_suggestions").click()
     at.run()
     assert not at.exception, at.exception
@@ -125,6 +129,36 @@ def test_export_button_enabled_once_process_code_and_experience_are_set():
     at.radio(key="experiencia").set_value("2_a_5")
     at.run()
     assert not at.exception, at.exception
+
+    assert not _export_button(at).disabled
+
+
+def test_export_button_disabled_without_consent_even_with_process_code_and_experience():
+    at = _choose_one_catalog_and_one_ai_item(_generate(_run()))
+
+    at.text_input(key="codigo_processo").input("PROC-001")
+    at.run()
+    at.radio(key="experiencia").set_value("2_a_5")
+    at.run()
+    at.checkbox(key="consentimento").set_value(False)
+    at.run()
+
+    assert _export_button(at).disabled
+    captions = [caption.value for caption in at.caption]
+    assert any("Aceite a participação na pesquisa" in text for text in captions)
+
+
+def test_export_button_enabled_again_once_consent_is_accepted():
+    at = _choose_one_catalog_and_one_ai_item(_generate(_run()))
+
+    at.text_input(key="codigo_processo").input("PROC-001")
+    at.run()
+    at.radio(key="experiencia").set_value("2_a_5")
+    at.run()
+    at.checkbox(key="consentimento").set_value(False)
+    at.run()
+    at.checkbox(key="consentimento").set_value(True)
+    at.run()
 
     assert not _export_button(at).disabled
 

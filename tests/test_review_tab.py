@@ -16,6 +16,10 @@ def _run() -> AppTest:
 
 
 def _generate(at: AppTest) -> AppTest:
+    consentimento = at.checkbox(key="consentimento")
+    if not consentimento.value:
+        consentimento.set_value(True)
+        at.run()
     at.button(key="btn_generate_suggestions").click()
     at.run()
     assert not at.exception, at.exception

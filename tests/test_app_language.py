@@ -28,6 +28,10 @@ def _inclusion_checkboxes(at: AppTest):
 
 def _generate(at: AppTest) -> AppTest:
     """Clica em 'Gerar sugestoes' (so entao a IA/pareamento sao chamados)."""
+    consentimento = at.checkbox(key="consentimento")
+    if not consentimento.value:
+        consentimento.set_value(True)
+        at.run()
     at.button(key="btn_generate_suggestions").click()
     at.run()
     assert not at.exception, at.exception
@@ -74,6 +78,8 @@ def test_switching_language_keeps_inputs_and_blind_review_edits():
     _box(at, "ctx_criticidade").select("alta")
     _box(at, "ctx_modalidade").select("pregao_poc")
     at.number_input(key="ctx_prazo").set_value(24)
+    at.checkbox(key="consentimento").set_value(True)
+    at.run()
     at.button(key="btn_generate_suggestions").click()
     at.run()
     assert not at.exception, at.exception

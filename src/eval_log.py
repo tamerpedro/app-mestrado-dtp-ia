@@ -112,6 +112,7 @@ class EvaluationLog:
     totais: EvaluationTotals = field(default_factory=EvaluationTotals)
     falhas_ia: list[dict] = field(default_factory=list)
     respostas_finais: dict = field(default_factory=dict)
+    consentimento: bool = False  # aceite do termo de pesquisa (barra lateral)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -218,6 +219,7 @@ def build_evaluation_log(
     selected_rows: list,
     falhas_ia: list[dict],
     respostas_finais: dict,
+    consentimento: bool = False,
 ) -> EvaluationLog:
     """Monta o ``EvaluationLog`` (schema v2) a partir do estado da avaliacao.
 
@@ -238,6 +240,7 @@ def build_evaluation_log(
         semente=semente,
         nome_caso=nome_caso,
         experiencia=experiencia,
+        consentimento=consentimento,
     )
     log.falhas_ia = list(falhas_ia)
 
