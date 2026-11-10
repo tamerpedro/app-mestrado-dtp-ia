@@ -532,33 +532,8 @@ def render_language_selector() -> None:
     st.query_params["lang"] = st.session_state.lang
 
 
-def _apply_case_to_context_fields(context: ContractContext) -> None:
-    """Preenche os campos da contratacao com os de um caso salvo.
-
-    So roda quando o caso selecionado muda (nao a cada rerun), para o
-    usuario poder editar os campos depois sem que voltem ao valor do caso.
-    Os campos com ``select()`` tem sua chave de widget limpa para forcar a
-    resincronizacao com o novo valor nesta rerun.
-    """
-    st.session_state.ctx_objeto = context.objeto
-    st.session_state.ctx_valor = context.valor_estimado
-    st.session_state.ctx_contexto = context.contexto
-    for key, value in [
-        ("ctx_tipo", context.tipo_contratacao),
-        ("ctx_criticidade", context.criticidade),
-        ("ctx_modalidade", context.modalidade),
-    ]:
-        st.session_state[key] = value
-        st.session_state.pop(f"{key}@{LANG}", None)
-    try:
-        st.session_state.ctx_prazo = int(str(context.prazo).split()[0])
-    except (ValueError, IndexError):
-        pass
-
-
 def render_case_selector() -> tuple[Path | None, str | None]:
-    """Seletor "Caso" na barra lateral; aplica o contexto do caso escolhido
-    uma unica vez (na troca), para o usuario poder editar depois.
+    """Seletor "Caso" na barra lateral.
 
     Devolve ``(caminho, nome)`` do caso selecionado (ambos ``None`` para
     "Nenhum, preencher manualmente") - o nome vai para o log na Parte 3.
@@ -576,13 +551,6 @@ def render_case_selector() -> tuple[Path | None, str | None]:
         format_func=lambda value: labels.get(value, value),
         key="selected_case",
     )
-
-    if selected != NO_CASE and st.session_state.get("_applied_case") != selected:
-        _, case_context = load_case(Path(selected))
-        _apply_case_to_context_fields(case_context)
-        st.session_state._applied_case = selected
-    elif selected == NO_CASE:
-        st.session_state._applied_case = None
 
     if selected == NO_CASE:
         return None, None
@@ -605,50 +573,59 @@ def build_context() -> tuple[ContractContext, bool, Path | None, str | None]:
         render_language_selector()
         st.text_input(tr("process.code"), help=tr("process.help"), key="codigo_processo")
         selected_case_path, selected_case_name = render_case_selector()
-        st.header(tr("sidebar.contract"))
-        objeto = st.text_area(tr("field.object"), value=tr("field.object_default"), key="ctx_objeto")
-        tipo = select(
-            tr("field.type"),
-            CONTRACT_TYPES,
-            format_func=label_in(contract_type_label),
-            key="ctx_tipo",
-        )
-        valor = currency_input(tr("field.value"), key="ctx_valor", help=tr("help.value"))
-        criticidade = select(
-            tr("field.criticality"),
-            CRITICALITIES,
-            index=1,
-            format_func=label_in(criticality_label),
-            help=tr("help.criticality"),
-            key="ctx_criticidade",
-        )
-        prazo_meses = st.number_input(
-            tr("field.term"),
-            min_value=1,
-            value=12,
-            step=1,
-            help=tr("help.term"),
-            key="ctx_prazo",
-        )
-        modalidade = select(
-            tr("field.modality"),
-            MODALITIES,
-            index=MODALITIES.index(DEFAULT_MODALITY),
-            format_func=label_in(modality_label),
-            help=tr("help.modality"),
-            key="ctx_modalidade",
-        )
-        contexto = st.text_area(
-            tr("field.context"),
-            value=tr("field.context_default"),
-            help=tr("help.context"),
-            key="ctx_contexto",
-        )
+        if selected_case_path is not None:
+            # Caso compartilhado: o contexto vem do arquivo do caso e nao e editavel
+            # (o cache de riscos de IA foi gerado para exatamente esse contexto).
+            _, case_context = load_case(selected_case_path)
+            st.caption(case_context.objeto)
+        else:
+            case_context = None
+            st.header(tr("sidebar.contract"))
+            objeto = st.text_area(tr("field.object"), value=tr("field.object_default"), key="ctx_objeto")
+            tipo = select(
+                tr("field.type"),
+                CONTRACT_TYPES,
+                format_func=label_in(contract_type_label),
+                key="ctx_tipo",
+            )
+            valor = currency_input(tr("field.value"), key="ctx_valor", help=tr("help.value"))
+            criticidade = select(
+                tr("field.criticality"),
+                CRITICALITIES,
+                index=1,
+                format_func=label_in(criticality_label),
+                help=tr("help.criticality"),
+                key="ctx_criticidade",
+            )
+            prazo_meses = st.number_input(
+                tr("field.term"),
+                min_value=1,
+                value=12,
+                step=1,
+                help=tr("help.term"),
+                key="ctx_prazo",
+            )
+            modalidade = select(
+                tr("field.modality"),
+                MODALITIES,
+                index=MODALITIES.index(DEFAULT_MODALITY),
+                format_func=label_in(modality_label),
+                help=tr("help.modality"),
+                key="ctx_modalidade",
+            )
+            contexto = st.text_area(
+                tr("field.context"),
+                value=tr("field.context_default"),
+                help=tr("help.context"),
+                key="ctx_contexto",
+            )
         generate_clicked = st.button(
             tr("action.generate"), type="primary", key="btn_generate_suggestions", disabled=not consentimento
         )
         if not consentimento:
             st.caption(tr("consent.required_caption"))
+    if case_context is not None:
+        return case_context, generate_clicked, selected_case_path, selected_case_name
     context = ContractContext(
         objeto=objeto,
         tipo_contratacao=tipo,
