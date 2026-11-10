@@ -91,7 +91,6 @@
   "item.consequence": "Consequência",
   "item.contingency": "Ação de contingência",
   "item.delete": "Excluir",
-  "item.details": "Detalhes",
   "item.preventive": "Ação preventiva",
   "level.critical": "Crítico",
   "level.high": "Alto",
@@ -180,6 +179,7 @@
   "strategy.avoid": "Evitar",
   "strategy.mitigate": "Mitigar",
   "strategy.share": "Compartilhar",
+  "suggestions.instruction": "Marque tudo o que parecer relevante pelo título. Na próxima aba você lê os detalhes e pode retirar o que não servir.",
   "tab.export": "Exportação",
   "tab.review": "Revisão humana",
   "tab.suggestions": "Sugestões"

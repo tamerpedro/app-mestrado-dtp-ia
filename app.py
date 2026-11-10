@@ -989,9 +989,8 @@ def render_blind_category(
     """Renderiza a lista cega (catalogo+IA misturados) de uma categoria, so
     para escolher - nada aqui e editavel (a edicao fica na aba Revisao).
 
-    O ID neutro, o titulo e a caixa "incluir" ficam visiveis sem precisar
-    expandir; o expander mostra causa, consequencia, P×I e acoes so para
-    leitura. Preenche ``items_by_slot[slot_id]`` com a decisao e os dados
+    So aparecem o ID neutro, o titulo e a caixa "incluir"; os detalhes
+    (causa, consequencia, P×I e acoes) ficam apenas na aba Revisao. Preenche ``items_by_slot[slot_id]`` com a decisao e os dados
     (linha-base, idioma atual) que a aba Revisao vai editar.
 
     ``generation`` (semente do sorteio atual) entra na chave do widget
@@ -1022,33 +1021,6 @@ def render_blind_category(
             )
         with col_title:
             st.markdown(f"**{slot_key}** - {escape(defaults['risco'])}")
-
-        with st.expander(tr("item.details"), expanded=False):
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric(tr("field.probability"), probability_label(canonical_scale(row.probabilidade), LANG))
-            with col2:
-                st.metric(tr("field.impact"), impact_label(canonical_scale(row.impacto), LANG))
-            with col3:
-                nivel = risk_level(row.probabilidade, row.impacto)
-                st.metric(tr("field.level"), risk_level_label(nivel, LANG))
-
-            st.markdown(f"**{escape(tr('field.cause'))}:** {escape(defaults['causa'])}")
-            consequencia_items = [text for text in defaults["consequencias"] if text]
-            if consequencia_items:
-                st.markdown(f"**{escape(tr('section.consequences'))}:**")
-                for text in consequencia_items:
-                    st.markdown(f"- {escape(text)}")
-            preventiva_items = [action.descricao for action in defaults["preventivas"] if action.descricao]
-            if preventiva_items:
-                st.markdown(f"**{escape(tr('section.preventive'))}:**")
-                for text in preventiva_items:
-                    st.markdown(f"- {escape(text)}")
-            contingencia_items = [action.descricao for action in defaults["contingencias"] if action.descricao]
-            if contingencia_items:
-                st.markdown(f"**{escape(tr('section.contingency'))}:**")
-                for text in contingencia_items:
-                    st.markdown(f"- {escape(text)}")
 
         items_by_slot[slot_key] = {
             "row": row,
@@ -1102,6 +1074,7 @@ with tab1:
         if not categories:
             st.info(tr("empty.suggested"))
         else:
+            st.info(tr("suggestions.instruction"))
             for category in categories:
                 render_blind_category(
                     category,
