@@ -1261,6 +1261,7 @@ with tab3:
             index=None,
             key="experiencia",
         )
+        st.caption(tr("likert.legend"))
         utilidade = st.radio(tr("likert.usefulness"), LIKERT_SCALE, horizontal=True, key="likert_utilidade")
         confianca = st.radio(tr("likert.confidence"), LIKERT_SCALE, horizontal=True, key="likert_confianca")
         esforco = st.radio(tr("likert.effort"), LIKERT_SCALE, horizontal=True, key="likert_esforco")

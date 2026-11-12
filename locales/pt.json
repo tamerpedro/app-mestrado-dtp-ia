@@ -110,6 +110,7 @@
   "likert.effort": "Esforço",
   "likert.export_caption": "Ao terminar, exporte o log e envie o arquivo ao pesquisador.",
   "likert.export_log": "Exportar log da avaliação (.json)",
+  "likert.legend": "Nas três perguntas abaixo, responda de 1 a 5, em que 1 = muito baixo e 5 = muito alto.\n\n- **Utilidade**: o quanto as sugestões ajudaram a montar a matriz de riscos.\n- **Confiança**: o quanto você confia na matriz final.\n- **Esforço**: o quanto de esforço foi necessário para chegar à matriz final.",
   "likert.missing_process_code": "Informe o código do processo na barra lateral para exportar o log.",
   "likert.usefulness": "Utilidade",
   "manual.added": "Risco {id} adicionado para revisão.",
