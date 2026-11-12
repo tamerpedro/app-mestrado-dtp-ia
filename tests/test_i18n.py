@@ -31,6 +31,19 @@ def test_every_key_used_in_code_exists():
     assert used and not missing, missing
 
 
+def test_dynamic_translation_keys_resolve_for_every_known_code():
+    """Chaves montadas em runtime (``tr(f"prefixo.{codigo}")``) nao sao
+    pegas pelo grep de ``test_every_key_used_in_code_exists`` (so casa
+    ``tr("...")`` literal). Garante aqui que cada codigo conhecido usado
+    dessa forma em app.py tem uma chave correspondente nos dois idiomas."""
+    dynamic_keys = [f"item.{slot}" for slot in ["consequence", "preventive", "contingency"]]
+
+    pt, en = _catalog("pt"), _catalog("en")
+    for key in dynamic_keys:
+        assert key in pt, key
+        assert key in en, key
+
+
 def test_t_formats_and_falls_back():
     assert t("manual.added", "en", id="MAN001") == "Risk MAN001 added for review."
     assert t("manual.added", "xx", id="MAN001") == "Risco MAN001 adicionado para revisão."

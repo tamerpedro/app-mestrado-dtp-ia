@@ -31,8 +31,8 @@ CATEGORY_TITLES = {
     "selecao": "2 - Riscos da Seleção de Fornecedor",
     "gestao": "3 - Riscos da Gestão do Contrato",
     "solucao": "4 - Riscos da Solução",
-    "instalacao": "4 - Riscos da Instalação dos Equipamentos",
-    "cronograma": "5 - Riscos para o cronograma da contratação",
+    "instalacao": "5 - Riscos da Instalação dos Equipamentos",
+    "cronograma": "6 - Riscos para o cronograma da contratação",
 }
 
 
@@ -343,6 +343,6 @@ def _category_number(category: str) -> int:
         "selecao": 2,
         "gestao": 3,
         "solucao": 4,
-        "instalacao": 4,
-        "cronograma": 5,
+        "instalacao": 5,
+        "cronograma": 6,
     }.get(category, 1)

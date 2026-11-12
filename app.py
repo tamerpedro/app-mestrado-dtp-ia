@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import base64
+import json
+import re
+import uuid
 from collections import defaultdict
 from html import escape
 import io
@@ -9,6 +12,15 @@ from pathlib import Path
 import streamlit as st
 from openpyxl import Workbook
 
+from src.ai_provider import AIProviderError, FakeProvider, build_provider, load_ai_config
+from src.case_store import get_or_generate_case_ai_risks, list_case_files, load_case
+from src.catalog_mix import (
+    ORIGIN_CATALOG,
+    CategoryItems,
+    build_category_mix,
+    generate_ai_risks_for_all_categories,
+)
+from src.currency import format_brl, parse_brl
 from src.docx_exporter import to_docx
 from src.domain import (
     ACTION_STATUSES,
@@ -28,16 +40,31 @@ from src.domain import (
     risk_level_label,
     strategy_label,
 )
+from src.eval_log import (
+    ORIGIN_MANUAL,
+    build_evaluation_log,
+    compute_totals,
+    edit_ratio,
+    safe_filename,
+)
+from src.eval_mode import is_modo_avaliacao, library_hash
+from src.risk_generator import PROMPT_VERSION_V2
 from src.i18n import DEFAULT_LANGUAGE, LANGUAGES, normalize_language, t
 from src.exporters import EXPORT_FIELDS, row_to_export_dict, selected_rows, to_csv, to_latex
 from src.models import ActionItem, ContractContext, MatrixRow
 from src.risk_library import load_risks, save_matrix_row_to_library
 from src.scoring import IMPACT_OPTIONS, PROBABILITY_OPTIONS, canonical_scale, risk_level
-from src.suggestions import suggest_risks
 
 
 DATA_PATH = Path("data/riscos_base.csv")
 LOGO_PATH = Path("assets/dataprev-logo.png")
+NO_CASE = "__nenhum__"
+LIKERT_SCALE = [1, 2, 3, 4, 5]
+EXPERIENCE_OPTIONS = ["ate_2", "2_a_5", "mais_5"]
+
+_SLOT_ID_RE = re.compile(r"S\d{2,}")
+
+
 def resolve_language() -> str:
     """Idioma da sessao: parametro ?lang= na primeira visita, depois o seletor."""
     if "lang" not in st.session_state:
@@ -76,19 +103,81 @@ def select(label: str, options: list, *, key: str, format_func, index: int = 0, 
     return value
 
 
-def library_text(widget, label: str, default: str, *, key: str) -> str:
+def library_text(widget, label: str, default: str, *, key: str, allow_empty: bool = True) -> str:
     """Campo de texto preenchido pela biblioteca de riscos.
 
     Enquanto o usuario nao editar, o texto acompanha o idioma (o ``default``
-    muda com ele). Depois de editado, o texto do usuario e mantido.
+    muda com ele). Depois de editado, o texto do usuario e mantido - mesmo
+    se o item sumir e voltar a aparecer entre rodadas (ex.: desmarcar e
+    marcar de novo na Revisao). O Streamlit limpa o estado de um widget que
+    nao e desenhado numa rodada; por isso guardamos uma copia "sticky" fora
+    do ciclo de vida do widget, para restaurar quando ele reaparecer.
+
+    ``allow_empty=False`` e para campos que nunca devem ficar em branco
+    (Risco, Causa): se o valor guardado estiver vazio e houver um ``default``
+    nao vazio, o campo volta a mostrar o default em vez de ficar travado em
+    branco. Sem isso, qualquer esvaziamento acidental do campo (ex.: um
+    valor transitorio vazio enviado pelo navegador numa interacao rapida)
+    fica "colado" em branco para sempre, mesmo desmarcando e marcando o item
+    de novo - foi exatamente o bug relatado onde o Risco/Causa de um item
+    selecionado aparecia em branco na Revisao e na Exportacao.
     """
+    sticky = st.session_state.setdefault("_sticky_text", {})
+    if key not in st.session_state and key in sticky:
+        st.session_state[key] = sticky[key]
     seed_key = f"{key}__seed"
     seed = st.session_state.get(seed_key)
     untouched = key in st.session_state and st.session_state[key] == seed
-    if key not in st.session_state or (untouched and default != seed):
+    cleared_but_required = (
+        not allow_empty and key in st.session_state and not st.session_state[key].strip() and default
+    )
+    if key not in st.session_state or (untouched and default != seed) or cleared_but_required:
         st.session_state[key] = default
     st.session_state[seed_key] = default
-    return widget(label, key=key)
+    value = widget(label, key=key)
+    sticky[key] = value
+    return value
+
+
+def currency_input(label: str, *, key: str, help: str | None = None) -> float:
+    """Campo de valor monetario com separador de milhar, para contratacoes de
+    qualquer porte (ate centenas de milhoes de reais) sem depender das setas
+    de incremento/decremento do ``st.number_input`` (inuteis nessa escala).
+
+    ``key`` guarda o valor numerico (``float``), lido/escrito por outras
+    partes do app (ex.: ao carregar um caso). O widget de texto em si troca
+    de chave (``f"{key}_text_<versao>"``) sempre que precisa mostrar um valor
+    diferente do que o usuario acabou de digitar - o Streamlit nao deixa
+    sobrescrever ``session_state`` de uma chave ja instanciada nesta rodada,
+    entao reformatar exige uma chave nova (e um rerun, para o texto
+    reformatado aparecer sem precisar de outra interacao do usuario). Uma
+    chave "semente" (mesma ideia de ``library_text``) distingue ``key``
+    mudar por fora (caso carregado) de mudar porque a propria digitacao do
+    usuario acabou de ser convertida.
+    """
+    version_key = f"{key}__version"
+    seed_key = f"{key}__seed"
+    canonical = st.session_state.get(key, 0.0)
+    seed = st.session_state.get(seed_key)
+    externally_changed = seed is None or canonical != seed
+    version = st.session_state.get(version_key, 0)
+    if externally_changed:
+        version += 1
+        st.session_state[version_key] = version
+    text_key = f"{key}_text_{version}"
+
+    if text_key not in st.session_state:
+        st.session_state[text_key] = format_brl(canonical)
+
+    text_value = st.text_input(label, help=help, key=text_key)
+    value = parse_brl(text_value)
+    st.session_state[key] = value
+    st.session_state[seed_key] = value
+
+    if text_value != format_brl(value):
+        st.session_state[version_key] = version + 1
+        st.rerun()
+    return value
 
 
 st.set_page_config(page_title=tr("app.title"), layout="wide")
@@ -341,8 +430,7 @@ def image_to_data_uri(path: Path) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def render_app_header(context: ContractContext, suggested_rows: list[MatrixRow]) -> None:
-    high_count = count_high_or_critical(suggested_rows)
+def render_app_header(context: ContractContext, total_items: int, total_categories: int) -> None:
     logo_uri = image_to_data_uri(LOGO_PATH)
     logo_html = (
         f'<div class="dtp-logo-wrap"><img src="{logo_uri}" alt="{escape(tr("app.logo_alt"))}"></div>'
@@ -363,16 +451,12 @@ def render_app_header(context: ContractContext, suggested_rows: list[MatrixRow])
             <div class="dtp-status-grid">
                 <div class="dtp-status"><span>{escape(tr("header.type"))}</span><strong>{escape(contract_type_label(context.tipo_contratacao, LANG))}</strong></div>
                 <div class="dtp-status"><span>{escape(tr("header.criticality"))}</span><strong>{escape(criticality_label(context.criticidade, LANG))}</strong></div>
-                <div class="dtp-status"><span>{escape(tr("header.suggested"))}</span><strong>{escape(tr("header.suggested_value", total=len(suggested_rows), high=high_count))}</strong></div>
+                <div class="dtp-status"><span>{escape(tr("header.items"))}</span><strong>{escape(tr("header.items_value", total=total_items, categories=total_categories))}</strong></div>
             </div>
         </section>
         """,
         unsafe_allow_html=True,
     )
-
-
-def count_high_or_critical(rows: list[MatrixRow]) -> int:
-    return sum(1 for row in rows if row.nivel in {"high", "critical"})
 
 
 def render_section_label(label: str) -> None:
@@ -382,123 +466,59 @@ def render_section_label(label: str) -> None:
 apply_dataprev_theme()
 
 
-def context_state_key(context: ContractContext) -> str:
-    return "|".join(
-        [
-            context.objeto,
-            context.tipo_contratacao,
-            str(context.valor_estimado),
-            context.criticidade,
-            context.prazo,
-            context.modalidade,
-            context.contexto,
-        ]
-    )
+def _clear_blind_widget_state() -> None:
+    """Limpa os widgets de S01..S99 (e a copia "sticky" deles, usada por
+    ``library_text`` para sobreviver a desmarcar/marcar de novo) para que uma
+    nova rodada de itens (apos mudar o contexto) nao herde textos editados de
+    uma rodada anterior."""
+    for state_key in list(st.session_state.keys()):
+        if _SLOT_ID_RE.search(state_key):
+            del st.session_state[state_key]
+    sticky = st.session_state.get("_sticky_text")
+    if sticky:
+        for sticky_key in list(sticky.keys()):
+            if _SLOT_ID_RE.search(sticky_key):
+                del sticky[sticky_key]
 
 
-def ensure_suggestion_overrides(context: ContractContext) -> None:
-    key = context_state_key(context)
-    if st.session_state.get("suggestion_context_key") != key:
-        st.session_state.suggestion_context_key = key
-        st.session_state.force_include_ids = set()
-        st.session_state.force_exclude_ids = set()
+def maybe_generate_mix(
+    context: ContractContext,
+    risks: list,
+    provider,
+    lang: str,
+    generate_clicked: bool,
+    selected_case_path: Path | None,
+):
+    """So monta a lista cega catalogo+IA (e chama a IA, ou reusa o cache do
+    caso) quando o usuario clica em "Gerar sugestoes" - nunca so por abrir a
+    tela ou editar um campo.
+
+    O resultado fica em sessao ate o proximo clique (preserva selecoes e
+    edicoes do usuario entre reruns do Streamlit, inclusive ao trocar o
+    idioma: o texto do catalogo se adapta via ``risks_by_id`` na propria
+    renderizacao; o texto gerado pela IA fica congelado no idioma em que
+    foi gerado).
+    """
+    if generate_clicked:
+        _clear_blind_widget_state()
+        failures: list[dict] = []
+        on_failure = lambda categoria, erro: failures.append({"categoria": categoria, "erro": erro})  # noqa: E731
+        if selected_case_path is not None:
+            ai_risks = get_or_generate_case_ai_risks(
+                selected_case_path, lang, risks, context, provider, on_ai_failure=on_failure
+            )
+        else:
+            ai_risks = generate_ai_risks_for_all_categories(
+                risks, context, provider, lang=lang, on_ai_failure=on_failure
+            )
+        result = build_category_mix(risks, context, ai_risks, lang=lang)
+        st.session_state.mix_result = result
+        st.session_state.mix_failures = failures
+    return st.session_state.get("mix_result"), st.session_state.get("mix_failures", [])
 
 
-def split_suggestion_rows(
-    base_suggested_rows: list[MatrixRow],
-    all_library_rows: list[MatrixRow],
-) -> tuple[list[MatrixRow], list[MatrixRow]]:
-    base_ids = {row.id for row in base_suggested_rows}
-    include_ids = set(st.session_state.get("force_include_ids", set()))
-    exclude_ids = set(st.session_state.get("force_exclude_ids", set()))
-    selected_ids = (base_ids | include_ids) - exclude_ids
-
-    suggested = [row for row in all_library_rows if row.id in selected_ids]
-    not_suggested = [row for row in all_library_rows if row.id not in selected_ids]
-    return suggested, not_suggested
-
-
-def suggestion_table_data(rows: list[MatrixRow]) -> list[dict[str, str]]:
-    return [
-        {
-            tr("col.id"): row.id,
-            tr("col.risk"): row.risco,
-            tr("col.category"): category_label(row.categoria, LANG),
-            tr("col.probability"): probability_label(row.probabilidade, LANG),
-            tr("col.impact"): impact_label(row.impacto, LANG),
-            tr("col.level"): risk_level_label(row.nivel, LANG),
-        }
-        for row in rows
-    ]
-
-
-def grouped_row_indexes(rows: list[MatrixRow]) -> list[tuple[str, list[tuple[int, MatrixRow]]]]:
-    grouped: dict[str, list[tuple[int, MatrixRow]]] = defaultdict(list)
-    for index, row in enumerate(rows):
-        grouped[row.categoria or "planejamento"].append((index, row))
-
-    def sort_key(item: tuple[str, list[tuple[int, MatrixRow]]]) -> tuple[int, str]:
-        category = item[0]
-        if category in CATEGORIES:
-            return (CATEGORIES.index(category), category)
-        return (len(CATEGORIES), category)
-
-    return sorted(grouped.items(), key=sort_key)
-
-
-def render_grouped_suggestion_tables(rows: list[MatrixRow], empty_message: str) -> None:
-    if not rows:
-        st.info(empty_message)
-        return
-
-    for category, indexed_rows in grouped_row_indexes(rows):
-        category_rows = [row for _, row in indexed_rows]
-        with st.expander(f"{category_label(category, LANG)} ({len(category_rows)})", expanded=True):
-            st.dataframe(suggestion_table_data(category_rows), width="stretch", hide_index=True)
-
-
-def row_option_label(row_lookup: dict[str, MatrixRow], risk_id: str) -> str:
-    row = row_lookup[risk_id]
-    return f"{row.id} - {row.risco}"
-
-
-def move_risk_to_suggested(risk_id: str) -> None:
-    st.session_state.force_include_ids.add(risk_id)
-    st.session_state.force_exclude_ids.discard(risk_id)
-    st.rerun()
-
-
-def move_risk_to_not_suggested(risk_id: str) -> None:
-    st.session_state.force_exclude_ids.add(risk_id)
-    st.session_state.force_include_ids.discard(risk_id)
-    st.rerun()
-
-
-def render_suggestion_mover(
-    rows: list[MatrixRow],
-    select_label: str,
-    button_label: str,
-    key_prefix: str,
-    on_move,
-) -> None:
-    if not rows:
-        st.info(tr("empty.list"))
-        return
-
-    row_lookup = {row.id: row for row in rows}
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        selected_id = select(
-            select_label,
-            [row.id for row in rows],
-            format_func=lambda risk_id: row_option_label(row_lookup, risk_id),
-            key=f"{key_prefix}_select",
-        )
-    with col2:
-        st.write("")
-        st.write("")
-        if st.button(button_label, key=f"{key_prefix}_button"):
-            on_move(selected_id)
+def row_text_blob(row: MatrixRow) -> str:
+    return "||".join([row.risco, row.causa, row.consequencia, row.acao_preventiva, row.acao_contingencia])
 
 
 def render_language_selector() -> None:
@@ -512,8 +532,35 @@ def render_language_selector() -> None:
     st.query_params["lang"] = st.session_state.lang
 
 
-def build_context() -> ContractContext:
+def render_case_selector() -> tuple[Path | None, str | None]:
+    """Seletor "Caso" na barra lateral.
+
+    Devolve ``(caminho, nome)`` do caso selecionado (ambos ``None`` para
+    "Nenhum, preencher manualmente") - o nome vai para o log na Parte 3.
+    """
+    case_files = list_case_files()
+    options = [NO_CASE, *(str(path) for path in case_files)]
+    labels = {NO_CASE: tr("case.none")}
+    for path in case_files:
+        nome, _ = load_case(path)
+        labels[str(path)] = nome
+
+    selected = select(
+        tr("case.label"),
+        options,
+        format_func=lambda value: labels.get(value, value),
+        key="selected_case",
+    )
+
+    if selected == NO_CASE:
+        return None, None
+    return Path(selected), labels.get(selected)
+
+
+def build_context() -> tuple[ContractContext, bool, Path | None, str | None]:
     with st.sidebar:
+        st.info(tr("consent.notice"))
+        consentimento = st.checkbox(tr("consent.checkbox"), key="consentimento")
         st.markdown(
             f"""
             <div class="dtp-sidebar-brand">
@@ -524,52 +571,62 @@ def build_context() -> ContractContext:
             unsafe_allow_html=True,
         )
         render_language_selector()
-        st.header(tr("sidebar.contract"))
-        objeto = st.text_area(tr("field.object"), value=tr("field.object_default"), key="ctx_objeto")
-        tipo = select(
-            tr("field.type"),
-            CONTRACT_TYPES,
-            format_func=label_in(contract_type_label),
-            key="ctx_tipo",
+        st.text_input(tr("process.code"), help=tr("process.help"), key="codigo_processo")
+        selected_case_path, selected_case_name = render_case_selector()
+        if selected_case_path is not None:
+            # Caso compartilhado: o contexto vem do arquivo do caso e nao e editavel
+            # (o cache de riscos de IA foi gerado para exatamente esse contexto).
+            _, case_context = load_case(selected_case_path)
+            st.caption(case_context.objeto)
+        else:
+            case_context = None
+            st.header(tr("sidebar.contract"))
+            objeto = st.text_area(tr("field.object"), value=tr("field.object_default"), key="ctx_objeto")
+            tipo = select(
+                tr("field.type"),
+                CONTRACT_TYPES,
+                format_func=label_in(contract_type_label),
+                key="ctx_tipo",
+            )
+            valor = currency_input(tr("field.value"), key="ctx_valor", help=tr("help.value"))
+            criticidade = select(
+                tr("field.criticality"),
+                CRITICALITIES,
+                index=1,
+                format_func=label_in(criticality_label),
+                help=tr("help.criticality"),
+                key="ctx_criticidade",
+            )
+            prazo_meses = st.number_input(
+                tr("field.term"),
+                min_value=1,
+                value=12,
+                step=1,
+                help=tr("help.term"),
+                key="ctx_prazo",
+            )
+            modalidade = select(
+                tr("field.modality"),
+                MODALITIES,
+                index=MODALITIES.index(DEFAULT_MODALITY),
+                format_func=label_in(modality_label),
+                help=tr("help.modality"),
+                key="ctx_modalidade",
+            )
+            contexto = st.text_area(
+                tr("field.context"),
+                value=tr("field.context_default"),
+                help=tr("help.context"),
+                key="ctx_contexto",
+            )
+        generate_clicked = st.button(
+            tr("action.generate"), type="primary", key="btn_generate_suggestions", disabled=not consentimento
         )
-        valor = st.number_input(
-            tr("field.value"),
-            min_value=0.0,
-            step=1000.0,
-            help=tr("help.value"),
-            key="ctx_valor",
-        )
-        criticidade = select(
-            tr("field.criticality"),
-            CRITICALITIES,
-            index=1,
-            format_func=label_in(criticality_label),
-            help=tr("help.criticality"),
-            key="ctx_criticidade",
-        )
-        prazo_meses = st.number_input(
-            tr("field.term"),
-            min_value=1,
-            value=12,
-            step=1,
-            help=tr("help.term"),
-            key="ctx_prazo",
-        )
-        modalidade = select(
-            tr("field.modality"),
-            MODALITIES,
-            index=MODALITIES.index(DEFAULT_MODALITY),
-            format_func=label_in(modality_label),
-            help=tr("help.modality"),
-            key="ctx_modalidade",
-        )
-        contexto = st.text_area(
-            tr("field.context"),
-            value=tr("field.context_default"),
-            help=tr("help.context"),
-            key="ctx_contexto",
-        )
-    return ContractContext(
+        if not consentimento:
+            st.caption(tr("consent.required_caption"))
+    if case_context is not None:
+        return case_context, generate_clicked, selected_case_path, selected_case_name
+    context = ContractContext(
         objeto=objeto,
         tipo_contratacao=tipo,
         valor_estimado=valor,
@@ -579,6 +636,7 @@ def build_context() -> ContractContext:
         modalidade=modalidade,
         contexto=contexto,
     )
+    return context, generate_clicked, selected_case_path, selected_case_name
 
 
 FINAL_MATRIX_COLUMNS = {
@@ -635,10 +693,12 @@ def safe_index(options: list[str], value: str, default: int = 0) -> int:
 def add_manual_risk_form() -> None:
     ensure_manual_rows()
     with st.expander(tr("manual.expander"), expanded=False):
+        pending_message = st.session_state.pop("_manual_risk_added_message", None)
+        if pending_message:
+            st.success(pending_message)
         with st.form("manual_risk_form", clear_on_submit=True):
             col1, col2, col3 = st.columns(3)
             with col1:
-                manual_id = st.text_input(tr("field.id"), value=next_manual_id())
                 categoria = select(
                     tr("field.category"), CATEGORIES, format_func=label_in(category_label), key="manual_categoria"
                 )
@@ -667,9 +727,10 @@ def add_manual_risk_form() -> None:
             submitted = st.form_submit_button(tr("manual.submit"))
 
         if submitted and risco.strip():
+            manual_id = next_manual_id()
             st.session_state.manual_rows.append(
                 MatrixRow(
-                    id=manual_id.strip() or next_manual_id(),
+                    id=manual_id,
                     risco=risco.strip(),
                     categoria=categoria,
                     causa=causa.strip(),
@@ -684,7 +745,11 @@ def add_manual_risk_form() -> None:
                     tags=["manual"],
                 )
             )
-            st.success(tr("manual.added", id=manual_id))
+            st.session_state["_manual_risk_added_message"] = tr("manual.added", id=manual_id)
+            # Este form roda por ultimo no script (depois da aba de Revisao ja ter
+            # lido manual_rows); sem forcar um novo rerun agora, o risco recem
+            # adicionado so apareceria na Revisao/Exportacao na proxima interacao.
+            st.rerun()
         elif submitted:
             st.warning(tr("manual.missing_title"))
 
@@ -752,9 +817,10 @@ def edit_action_items(risk_key: str, slot: str, base_actions: list[ActionItem]) 
                 key=f"{risk_key}_{slot}_sit_{index}",
             )
         with col3:
-            responsavel = st.text_input(
+            responsavel = library_text(
+                st.text_input,
                 tr("field.owner"),
-                value=base.responsavel,
+                base.responsavel,
                 key=f"{risk_key}_{slot}_resp_{index}",
             )
         with col4:
@@ -768,13 +834,28 @@ def edit_action_items(risk_key: str, slot: str, base_actions: list[ActionItem]) 
     return actions
 
 
-def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow]:
+def edit_rows(rows: list[MatrixRow], context: ContractContext, generation: int) -> list[MatrixRow]:
+    """Edicao dos riscos escolhidos na Revisao (itens as cegas + manuais).
+
+    A chave de cada widget e ``row.id`` (ja unico: slot_id para itens as
+    cegas, MANxxx para manuais) - nao a posicao na lista, que muda sempre
+    que um item e marcado/desmarcado na aba Sugestoes. Usar a posicao faria
+    o Streamlit "esquecer" as edicoes dos outros itens a cada mudanca.
+
+    Para itens as cegas, a chave tambem leva ``generation`` (semente do
+    sorteio atual): o mesmo slot_id (ex.: S32) pode apontar para um risco
+    diferente a cada clique em "Gerar sugestoes", e sem isso os campos
+    (Risco, Causa, Categoria no mapa, ...) podiam continuar mostrando o
+    texto - ou a edicao em branco - de um risco antigo que calhou de ocupar
+    esse mesmo slot numa rodada anterior. Linhas manuais (MANxxx) nao mudam
+    entre sorteios, entao mantem a chave estavel.
+    """
     edited_by_index: dict[int, MatrixRow] = {}
     for category, indexed_rows in grouped_row_indexes(rows):
         render_section_label(f"{category_label(category, LANG)} ({len(indexed_rows)})")
         with st.container():
             for index, row in indexed_rows:
-                risk_key = f"{row.id}_{index}"
+                risk_key = row.id if "manual" in row.tags else f"{row.id}_{generation}"
                 with st.expander(f"{row.id} - {row.risco}", expanded=row.selecionado):
                     selecionado = st.checkbox(tr("review.include"), value=row.selecionado, key=f"sel_{risk_key}")
                     col1, col2, col3 = st.columns(3)
@@ -813,8 +894,12 @@ def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow
                         key=f"estrategia_{risk_key}",
                     )
 
-                    risco = library_text(st.text_input, tr("field.risk"), row.risco, key=f"risco_{risk_key}")
-                    causa = library_text(st.text_area, tr("field.cause"), row.causa, key=f"causa_{risk_key}")
+                    risco = library_text(
+                        st.text_input, tr("field.risk"), row.risco, key=f"risco_{risk_key}", allow_empty=False
+                    )
+                    causa = library_text(
+                        st.text_area, tr("field.cause"), row.causa, key=f"causa_{risk_key}", allow_empty=False
+                    )
                     render_section_label(tr("section.consequences"))
                     consequencias = edit_text_items(risk_key, "consequence", row.consequencias)
                     render_section_label(tr("section.preventive"))
@@ -841,7 +926,8 @@ def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow
                         tags=row.tags,
                     )
                     if "manual" in row.tags:
-                        if st.button(tr("review.save_library"), key=f"save_library_{risk_key}"):
+                        disabled = is_modo_avaliacao()
+                        if st.button(tr("review.save_library"), key=f"save_library_{risk_key}", disabled=disabled):
                             result = save_matrix_row_to_library(DATA_PATH, edited_row, context, lang=LANG)
                             if result.saved:
                                 st.success(tr("library.saved", id=result.risk_id))
@@ -850,91 +936,389 @@ def edit_rows(rows: list[MatrixRow], context: ContractContext) -> list[MatrixRow
                                 st.info(tr("library.exists", id=result.risk_id))
                             else:
                                 st.error(tr("library.error", detail=result.detail or result.message))
+                        if disabled:
+                            st.caption(tr("library.save_disabled"))
                     edited_by_index[index] = edited_row
     return [edited_by_index[index] for index in range(len(rows))]
 
 
-context = build_context()
+def grouped_row_indexes(rows: list[MatrixRow]) -> list[tuple[str, list[tuple[int, MatrixRow]]]]:
+    grouped: dict[str, list[tuple[int, MatrixRow]]] = defaultdict(list)
+    for index, row in enumerate(rows):
+        grouped[row.categoria or "planejamento"].append((index, row))
+
+    def sort_key(item: tuple[str, list[tuple[int, MatrixRow]]]) -> tuple[int, str]:
+        category = item[0]
+        if category in CATEGORIES:
+            return (CATEGORIES.index(category), category)
+        return (len(CATEGORIES), category)
+
+    return sorted(grouped.items(), key=sort_key)
+
+
+def _blind_item_defaults(item, risks_by_id: dict[str, object]) -> dict:
+    """Texto do item no idioma atual: para itens de catalogo, consulta o
+    RiskItem original (acompanha o idioma); para IA, fica congelado no
+    idioma em que foi gerado."""
+    row = item.row
+    source_risk = risks_by_id.get(row.id) if item.origin == ORIGIN_CATALOG else None
+    if source_risk is not None:
+        return {
+            "risco": source_risk.text("titulo", LANG),
+            "causa": source_risk.text("causa", LANG),
+            "consequencias": [source_risk.text("consequencia", LANG)],
+            "preventivas": [ActionItem(source_risk.text("acao_preventiva", LANG))],
+            "contingencias": [ActionItem(source_risk.text("acao_contingencia", LANG))],
+        }
+    return {
+        "risco": row.risco,
+        "causa": row.causa,
+        "consequencias": row.consequencias,
+        "preventivas": row.acoes_preventivas,
+        "contingencias": row.acoes_contingencia,
+    }
+
+
+def render_blind_category(
+    category: CategoryItems,
+    items_by_slot: dict[str, dict],
+    risks_by_id: dict[str, object],
+    ai_failed: bool,
+    generation: int,
+) -> None:
+    """Renderiza a lista cega (catalogo+IA misturados) de uma categoria, so
+    para escolher - nada aqui e editavel (a edicao fica na aba Revisao).
+
+    So aparecem o ID neutro, o titulo e a caixa "incluir"; os detalhes
+    (causa, consequencia, P×I e acoes) ficam apenas na aba Revisao. Preenche ``items_by_slot[slot_id]`` com a decisao e os dados
+    (linha-base, idioma atual) que a aba Revisao vai editar.
+
+    ``generation`` (semente do sorteio atual) entra na chave do widget
+    "incluir" para que um novo clique em "Gerar sugestoes" nunca reaproveite
+    o estado de selecao de um slot anterior: o mesmo ``slot_id`` (ex.: S32)
+    pode calhar de apontar para um risco diferente a cada sorteio, e o
+    Streamlit mantem o valor de uma chave ja existente mesmo quando o
+    ``value=`` passado muda - sem isso, um item ficaria marcado (ou com
+    texto editado em branco) por causa de uma rodada anterior, sem relacao
+    com o risco atualmente nesse slot.
+    """
+    render_section_label(category_label(category.categoria, LANG))
+    if ai_failed:
+        st.caption(tr("category.ai_partial_warning"))
+
+    for item in category.items:
+        slot_key = item.slot_id
+        row = item.row
+        defaults = _blind_item_defaults(item, risks_by_id)
+
+        col_check, col_title = st.columns([1, 11])
+        with col_check:
+            incluido = st.checkbox(
+                tr("review.include"),
+                value=False,
+                key=f"incl_{slot_key}_{generation}",
+                label_visibility="collapsed",
+            )
+        with col_title:
+            st.markdown(f"**{slot_key}** - {escape(defaults['risco'])}")
+
+        items_by_slot[slot_key] = {
+            "row": row,
+            "origin": item.origin,
+            "categoria": category.categoria,
+            "posicao": item.posicao,
+            "defaults": defaults,
+            "incluido": incluido,
+        }
+
+
+context, generate_clicked, selected_case_path, selected_case_name = build_context()
 try:
     risks = load_risks(DATA_PATH)
 except ValueError as exc:
     st.error(tr("error.load_library", detail=exc))
     st.stop()
-base_suggested_rows = suggest_risks(risks, context, lang=LANG)
-all_library_rows = suggest_risks(risks, context, minimum_score=0, max_per_category=None, lang=LANG)
-ensure_suggestion_overrides(context)
-suggested_rows, not_suggested_rows = split_suggestion_rows(base_suggested_rows, all_library_rows)
+risks_by_id = {risk.id: risk for risk in risks}
 
-render_app_header(context, suggested_rows)
+ai_config = load_ai_config()
+ai_config_error: str | None = None
+try:
+    provider = build_provider(ai_config)
+except AIProviderError as exc:
+    provider = FakeProvider(fail=True)
+    ai_config_error = str(exc)
+
+mix_result, mix_failures = maybe_generate_mix(context, risks, provider, LANG, generate_clicked, selected_case_path)
+categories = mix_result.categories if mix_result is not None else []
+categories_with_ai_failure = {failure["categoria"] for failure in mix_failures}
+generation = mix_result.seed if mix_result is not None else 0
+
+render_app_header(context, sum(len(c.items) for c in categories), len(categories))
+
+if ai_config_error:
+    st.warning(tr("ai.unavailable", detail=ai_config_error))
 
 tab1, tab2, tab3 = st.tabs([tr("tab.suggestions"), tr("tab.review"), tr("tab.export")])
 
+items_by_slot: dict[str, dict] = {}
+
 with tab1:
     render_panel_title(tr("panel.suggested"))
-    col1, col2, col3 = st.columns(3)
-    col1.metric(tr("metric.suggestions"), len(suggested_rows))
-    col2.metric(tr("metric.high"), count_high_or_critical(suggested_rows))
-    col3.metric(tr("metric.categories"), len({row.categoria for row in suggested_rows}))
-    render_grouped_suggestion_tables(suggested_rows, tr("empty.suggested"))
-    render_suggestion_mover(
-        suggested_rows,
-        tr("mover.select_suggested"),
-        tr("mover.remove"),
-        "remove_suggested",
-        move_risk_to_not_suggested,
-    )
+    if mix_result is None:
+        st.info(tr("empty.not_generated"))
+    else:
+        col1, col2 = st.columns(2)
+        col1.metric(tr("metric.items_total"), sum(len(c.items) for c in categories))
+        col2.metric(tr("metric.categories"), len(categories))
 
-    render_panel_title(tr("panel.not_included"))
-    col1, col2, col3 = st.columns(3)
-    col1.metric(tr("metric.available"), len(not_suggested_rows))
-    col2.metric(tr("metric.high"), count_high_or_critical(not_suggested_rows))
-    col3.metric(tr("metric.categories"), len({row.categoria for row in not_suggested_rows}))
-    render_grouped_suggestion_tables(not_suggested_rows, tr("empty.not_included"))
-    render_suggestion_mover(
-        not_suggested_rows,
-        tr("mover.select_not_included"),
-        tr("mover.include"),
-        "include_not_suggested",
-        move_risk_to_suggested,
-    )
+        if not categories:
+            st.info(tr("empty.suggested"))
+        else:
+            st.info(tr("suggestions.instruction"))
+            for category in categories:
+                render_blind_category(
+                    category,
+                    items_by_slot,
+                    risks_by_id,
+                    category.categoria in categories_with_ai_failure,
+                    generation,
+                )
+
+    st.divider()
+    if st.button(tr("review.save_selection"), key="btn_save_selection"):
+        st.session_state["saved_selection_generation"] = generation
+    if st.session_state.get("saved_selection_generation") == generation:
+        st.success(tr("review.selection_saved"))
 
 with tab2:
     render_panel_title(tr("panel.review"))
-    add_manual_risk_form()
-    all_review_rows = [*suggested_rows, *st.session_state.manual_rows]
-    edited_rows = edit_rows(all_review_rows, context)
+    ensure_manual_rows()
+
+    selection_saved = st.session_state.get("saved_selection_generation") == generation
+    edited_rows: list[MatrixRow] = []
+
+    if not selection_saved:
+        st.info(tr("review.save_selection_first"))
+    else:
+        chosen_slots = [slot for slot, info in items_by_slot.items() if info["incluido"]]
+        manual_rows = st.session_state.manual_rows
+
+        baseline_rows: list[MatrixRow] = []
+
+        if not chosen_slots and not manual_rows:
+            st.info(tr("empty.review"))
+        else:
+            for slot in chosen_slots:
+                info = items_by_slot[slot]
+                defaults = info["defaults"]
+                source_row = info["row"]
+                baseline_rows.append(
+                    MatrixRow(
+                        id=slot,
+                        risco=defaults["risco"],
+                        categoria=info["categoria"],
+                        causa=defaults["causa"],
+                        consequencias=defaults["consequencias"],
+                        probabilidade=source_row.probabilidade,
+                        impacto=source_row.impacto,
+                        nivel=source_row.nivel,
+                        estrategia=source_row.estrategia,
+                        acoes_preventivas=defaults["preventivas"],
+                        acoes_contingencia=defaults["contingencias"],
+                        tags=source_row.tags,
+                    )
+                )
+            edited_rows = edit_rows(baseline_rows + manual_rows, context, generation)
+
+            # Medida de edicao: so para os itens escolhidos (nao para manuais), comparando
+            # com a linha-base no idioma atual - trocar de idioma sozinho nao conta como edicao.
+            review_decisions: dict[str, dict] = {}
+            for baseline, edited in zip(baseline_rows, edited_rows[: len(baseline_rows)]):
+                ratio = edit_ratio(row_text_blob(baseline), row_text_blob(edited))
+                review_decisions[baseline.id] = {"editado": ratio > 0.0, "proporcao_edicao": ratio}
+            st.session_state.review_decisions = review_decisions
+
+        add_manual_risk_form()
+
+        st.divider()
+        if st.button(tr("review.save_review"), key="btn_save_review"):
+            st.session_state["saved_review"] = {
+                "generation": generation,
+                "edited_rows": list(edited_rows),
+                "manual_rows": list(st.session_state.manual_rows),
+                "items_by_slot": dict(items_by_slot),
+                "review_decisions": dict(st.session_state.get("review_decisions", {})),
+            }
+        saved_review = st.session_state.get("saved_review")
+        if saved_review is not None and saved_review.get("generation") == generation:
+            st.success(tr("review.review_saved"))
 
 with tab3:
     render_panel_title(tr("panel.final"))
-    selected = selected_rows(edited_rows if "edited_rows" in locals() else suggested_rows)
-    col1, col2, col3 = st.columns(3)
-    col1.metric(tr("metric.selected"), len(selected))
-    col2.metric(tr("metric.preventive"), sum(len(row.acoes_preventivas) for row in selected))
-    col3.metric(tr("metric.contingency"), sum(len(row.acoes_contingencia) for row in selected))
-    st.dataframe(final_matrix_table(selected), width="stretch", hide_index=True)
-    if LANG != DEFAULT_LANGUAGE:
-        st.caption(tr("export.pt_only"))
 
-    csv_content = to_csv(selected)
-    latex_content = to_latex(selected)
-    docx_content = to_docx(selected, context)
+    saved_review = st.session_state.get("saved_review")
+    review_ready = saved_review is not None and saved_review.get("generation") == generation
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.download_button(tr("download.csv"), csv_content, "matriz_riscos.csv", "text/csv")
-    with col2:
-        st.download_button(
-            tr("download.excel"),
-            rows_to_xlsx(selected),
-            "matriz_riscos.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    if not review_ready:
+        st.info(tr("export.save_review_first"))
+    else:
+        saved_edited_rows = saved_review["edited_rows"]
+        saved_items_by_slot = saved_review["items_by_slot"]
+        saved_review_decisions = saved_review["review_decisions"]
+        selected = selected_rows(saved_edited_rows)
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric(tr("metric.selected"), len(selected))
+        col2.metric(tr("metric.preventive"), sum(len(row.acoes_preventivas) for row in selected))
+        col3.metric(tr("metric.contingency"), sum(len(row.acoes_contingencia) for row in selected))
+        st.dataframe(final_matrix_table(selected), width="stretch", hide_index=True)
+        if LANG != DEFAULT_LANGUAGE:
+            st.caption(tr("export.pt_only"))
+
+        csv_content = to_csv(selected)
+        latex_content = to_latex(selected)
+        docx_content = to_docx(selected, context)
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.download_button(tr("download.csv"), csv_content, "matriz_riscos.csv", "text/csv")
+        with col2:
+            st.download_button(
+                tr("download.excel"),
+                rows_to_xlsx(selected),
+                "matriz_riscos.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        with col3:
+            st.download_button(tr("download.latex"), latex_content, "matriz_riscos.tex", "text/plain")
+        with col4:
+            st.download_button(
+                tr("download.word"),
+                docx_content,
+                "mapa_de_gerenciamento_de_riscos.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+        render_section_label(tr("result.section_title"))
+
+        slot_origin = {slot: info["origin"] for slot, info in saved_items_by_slot.items()}
+        totals = compute_totals(saved_items_by_slot, saved_review_decisions, selected, slot_origin)
+
+        if not selected:
+            st.info(tr("result.empty"))
+        else:
+            render_section_label(tr("result.reveal_title"))
+            reveal_table = [
+                {
+                    tr("col.id"): row.id,
+                    tr("col.risk"): row.risco,
+                    tr("col.category"): category_label(row.categoria, LANG),
+                    tr("result.col_origin"): tr(f"result.origin_{slot_origin.get(row.id, ORIGIN_MANUAL)}"),
+                }
+                for row in selected
+            ]
+            st.dataframe(reveal_table, width="stretch", hide_index=True)
+
+            render_section_label(tr("result.composition_title"))
+            col1, col2, col3 = st.columns(3)
+            col1.metric(
+                tr("result.metric_catalogo"),
+                f"{totals.escolhidos_catalogo} ({totals.participacao_catalogo_pct:g}%)",
+            )
+            col2.metric(
+                tr("result.metric_ia"),
+                f"{totals.escolhidos_ia} ({totals.participacao_ia_pct:g}%)",
+            )
+            col3.metric(
+                tr("result.metric_manual"),
+                f"{totals.escolhidos_manual} ({totals.participacao_manual_pct:g}%)",
+            )
+            col4, col5, col6 = st.columns(3)
+            col4.metric(tr("result.metric_ai_adoption"), f"{totals.adocao_ia_pct:g}%")
+            col5.metric(tr("result.metric_edited_catalogo"), totals.editados_catalogo)
+            col6.metric(tr("result.metric_edited_ia"), totals.editados_ia)
+
+            render_section_label(tr("result.by_category_title"))
+            category_order = {categoria: index for index, categoria in enumerate(CATEGORIES)}
+            category_table = [
+                {
+                    tr("col.category"): category_label(cat.categoria, LANG),
+                    tr("result.metric_catalogo"): cat.escolhidos_catalogo,
+                    tr("result.metric_ia"): cat.escolhidos_ia,
+                    tr("result.metric_manual"): cat.escolhidos_manual,
+                }
+                for cat in sorted(
+                    totals.por_categoria, key=lambda cat: category_order.get(cat.categoria, len(CATEGORIES))
+                )
+            ]
+            st.dataframe(category_table, width="stretch", hide_index=True)
+
+        render_section_label(tr("final_form.title"))
+        experiencia = st.radio(
+            tr("final_form.experience"),
+            EXPERIENCE_OPTIONS,
+            format_func=lambda value: tr(f"experience.{value}"),
+            index=None,
+            key="experiencia",
         )
-    with col3:
-        st.download_button(tr("download.latex"), latex_content, "matriz_riscos.tex", "text/plain")
-    with col4:
-        st.download_button(
-            tr("download.word"),
-            docx_content,
-            "mapa_de_gerenciamento_de_riscos.docx",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        st.caption(tr("likert.legend"))
+        utilidade = st.radio(tr("likert.usefulness"), LIKERT_SCALE, horizontal=True, key="likert_utilidade")
+        confianca = st.radio(tr("likert.confidence"), LIKERT_SCALE, horizontal=True, key="likert_confianca")
+        esforco = st.radio(tr("likert.effort"), LIKERT_SCALE, horizontal=True, key="likert_esforco")
+        comentario = st.text_area(tr("likert.comment"), key="likert_comentario")
+
+        codigo_processo = (st.session_state.get("codigo_processo") or "").strip()
+        consentimento = bool(st.session_state.get("consentimento", False))
+        if not codigo_processo:
+            st.warning(tr("likert.missing_process_code"))
+        if not experiencia:
+            st.warning(tr("final_form.missing_experience"))
+
+        st.divider()
+        if st.button(tr("export.save_final_form"), key="btn_save_final_form"):
+            st.session_state["final_form_saved_generation"] = generation
+        final_form_saved = st.session_state.get("final_form_saved_generation") == generation
+        if final_form_saved:
+            st.success(tr("export.final_form_saved"))
+
+        log = build_evaluation_log(
+            codigo_processo=codigo_processo,
+            idioma=LANG,
+            provedor_ia=ai_config.provider,
+            modelo_ia=ai_config.model,
+            versao_prompt=PROMPT_VERSION_V2,
+            hash_biblioteca=library_hash(DATA_PATH),
+            semente=mix_result.seed if mix_result is not None else 0,
+            nome_caso=selected_case_name,
+            experiencia=experiencia or "",
+            items_by_slot=saved_items_by_slot,
+            review_decisions=saved_review_decisions,
+            edited_rows=saved_edited_rows,
+            manual_rows=saved_review["manual_rows"],
+            selected_rows=selected,
+            falhas_ia=[{"categoria": "*", "erro": ai_config_error}] if ai_config_error else list(mix_failures),
+            respostas_finais={
+                "utilidade": utilidade,
+                "confianca": confianca,
+                "esforco": esforco,
+                "comentario": comentario.strip(),
+            },
+            consentimento=consentimento,
         )
+        log_json = json.dumps(log.to_dict(), ensure_ascii=False, indent=2)
+        session_id = st.session_state.setdefault("_session_id", uuid.uuid4().hex[:10])
+        log_filename = f"log_{safe_filename(codigo_processo or 'processo')}_{session_id}.json"
+
+        st.download_button(
+            tr("likert.export_log"),
+            log_json,
+            log_filename,
+            "application/json",
+            disabled=not (codigo_processo and experiencia and consentimento and final_form_saved),
+            key="btn_export_log",
+        )
+        if not consentimento:
+            st.caption(tr("consent.required_caption"))
+        elif not final_form_saved:
+            st.caption(tr("export.save_required_caption"))
+        st.caption(tr("likert.export_caption"))

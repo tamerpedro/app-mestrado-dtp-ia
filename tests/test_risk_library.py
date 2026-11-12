@@ -1,14 +1,11 @@
-from pathlib import Path
-from uuid import uuid4
-
 import pytest
 
 from src.models import ActionItem, ContractContext, MatrixRow
 from src.risk_library import load_risks, save_matrix_row_to_library
 
 
-def test_load_risks_accepts_utf8_sig_header():
-    path = Path(f".test_riscos_bom_{uuid4().hex}.csv")
+def test_load_risks_accepts_utf8_sig_header(tmp_path):
+    path = tmp_path / "riscos_bom.csv"
     path.write_text(
         "\ufeffid,titulo,categoria,tipo_contratacao,palavras_chave,causa,consequencia,"
         "probabilidade_padrao,impacto_padrao,acao_preventiva,acao_contingencia,responsavel_sugerido\n"
@@ -25,8 +22,8 @@ def test_load_risks_accepts_utf8_sig_header():
     assert risks[0].impacto_padrao == 4
 
 
-def test_save_matrix_row_to_library_reloads_as_risk_item():
-    path = Path(f".test_riscos_library_{uuid4().hex}.csv")
+def test_save_matrix_row_to_library_reloads_as_risk_item(tmp_path):
+    path = tmp_path / "riscos_library.csv"
     context = ContractContext(
         objeto="Contratacao de software",
         tipo_contratacao="software",
@@ -63,8 +60,8 @@ def test_save_matrix_row_to_library_reloads_as_risk_item():
     assert "3-Média" in path.read_text(encoding="utf-8")
 
 
-def test_load_risks_rejects_invalid_scale():
-    path = Path(f".test_riscos_invalid_{uuid4().hex}.csv")
+def test_load_risks_rejects_invalid_scale(tmp_path):
+    path = tmp_path / "riscos_invalid.csv"
     path.write_text(
         "id,titulo,categoria,tipo_contratacao,palavras_chave,causa,consequencia,"
         "probabilidade_padrao,impacto_padrao,acao_preventiva,acao_contingencia,responsavel_sugerido\n"
@@ -97,11 +94,11 @@ def test_base_library_is_fully_translated_to_english():
         assert risk.palavras_chave_en, risk.id
     first = next(risk for risk in risks if risk.id == "R001")
     assert first.text("titulo", "en") == "Insufficient technical specification"
-    assert first.text("titulo", "pt") == "Especificacao tecnica insuficiente"
+    assert first.text("titulo", "pt") == "Especificação técnica insuficiente"
 
 
-def test_library_without_english_columns_falls_back_to_portuguese():
-    path = Path(f".test_riscos_legacy_{uuid4().hex}.csv")
+def test_library_without_english_columns_falls_back_to_portuguese(tmp_path):
+    path = tmp_path / "riscos_legacy.csv"
     path.write_text(
         "id,titulo,categoria,tipo_contratacao,palavras_chave,causa,consequencia,"
         "probabilidade_padrao,impacto_padrao,acao_preventiva,acao_contingencia,responsavel_sugerido\n"
@@ -137,8 +134,8 @@ def _context() -> ContractContext:
     return ContractContext("Software procurement", "software", 1000, "media", "12 meses", "pregao", "Core system")
 
 
-def test_risk_written_in_english_goes_to_english_columns():
-    path = Path(f".test_riscos_en_{uuid4().hex}.csv")
+def test_risk_written_in_english_goes_to_english_columns(tmp_path):
+    path = tmp_path / "riscos_en.csv"
 
     result = save_matrix_row_to_library(path, _manual_row("Integration failure"), _context(), lang="en")
     risk = load_risks(path)[0]
@@ -152,8 +149,8 @@ def test_risk_written_in_english_goes_to_english_columns():
     assert duplicate.saved is False and duplicate.risk_id == "R001"
 
 
-def test_saving_into_legacy_library_adds_english_columns():
-    path = Path(f".test_riscos_upgrade_{uuid4().hex}.csv")
+def test_saving_into_legacy_library_adds_english_columns(tmp_path):
+    path = tmp_path / "riscos_upgrade.csv"
     path.write_text(
         "﻿id,titulo,categoria,tipo_contratacao,palavras_chave,causa,consequencia,"
         "probabilidade_padrao,impacto_padrao,acao_preventiva,acao_contingencia,responsavel_sugerido\r\n"
