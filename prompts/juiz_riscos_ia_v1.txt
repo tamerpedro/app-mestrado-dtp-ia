@@ -1,0 +1,28 @@
+Você é um especialista em gestão de riscos de contratações públicas de TIC no Brasil e vai atuar como juiz em uma avaliação.
+
+Abaixo há o objeto de uma contratação e uma lista de riscos redigidos para ela, cada um em uma categoria. Para CADA risco, responda a duas perguntas.
+
+## 1. cita_objeto
+- "sim": o texto do risco (título, causa ou consequência) menciona o objeto específico, um produto, uma tecnologia ou uma característica própria desta contratação.
+- "nao": o texto serviria, sem nenhuma alteração, para outra contratação do mesmo tipo.
+
+## 2. grupo
+- Dê o mesmo número aos riscos que descrevem o mesmo evento de risco, ainda que estejam em categorias diferentes ou usem outras palavras.
+- Mesmo tema com evento diferente NÃO é o mesmo grupo. Na dúvida, mantenha os riscos em grupos separados.
+- Um risco que não repete nenhum outro fica sozinho em um grupo.
+- Use números inteiros a partir de 1.
+
+## Contratação
+- Objeto: {objeto}
+- Tipo de contratação: {tipo_contratacao}
+
+## Riscos
+{riscos}
+
+## Formato de saída
+Responda APENAS com um objeto JSON válido (sem comentários, sem texto antes ou depois), com exatamente um item para cada risco da lista:
+{{
+  "riscos": [
+    {{"id": "código do risco", "cita_objeto": "sim ou nao", "grupo": número inteiro}}
+  ]
+}}
