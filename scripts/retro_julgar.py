@@ -14,6 +14,15 @@ Dois modos, ambos retomaveis (pulam o que ja foi julgado) e com ``--limite N``
   Grava ``riscos_ia.csv``; o termo que nao aparece literalmente no texto do
   risco deixa a linha marcada na coluna ``conferir``.
 
+- ``--painel JUIZ``: a mesma cobertura, por um juiz do painel economico
+  (``scripts/retro_juizes.py``), com EXATAMENTE a entrada que o juiz de
+  referencia recebeu: mesmo prompt, mesmos candidatos e mesma ordem,
+  reconstruida da semente gravada em ``julgamento.csv`` (que nao e alterado).
+  Grava ``painel/julgamento_<juiz>.csv`` (colunas de ``julgamento.csv`` mais
+  parametros, data, tentativas e tokens) e ``painel/chamadas_<juiz>.csv`` (uma
+  linha por chamada). Risco sem resposta fica como ``sem julgamento`` e e
+  refeito na proxima execucao. As medidas saem de ``scripts/retro_painel.py``.
+
 O juiz vem de ``JUDGE_PROVIDER``/``JUDGE_MODEL`` (variavel de ambiente ou
 ``.streamlit/secrets.toml``) e tem de ser diferente do modelo gerador. Tudo e
 gravado em ``<corpus>/retrospectiva/``; nada no repositorio.
@@ -21,6 +30,8 @@ gravado em ``<corpus>/retrospectiva/``; nada no repositorio.
 Uso:
     python scripts/retro_julgar.py --corpus "<pasta do corpus>" [--limite N] [--dry-run]
     python scripts/retro_julgar.py --corpus "<pasta do corpus>" --riscos-ia [--limite N] [--dry-run]
+    python scripts/retro_julgar.py --corpus "<pasta do corpus>" --painel anthropic|openai|google
+        --chaves "<arquivo de chaves>" [--limite N] [--dry-run]
 """
 
 from __future__ import annotations
@@ -508,6 +519,178 @@ def julgar_riscos_ia(
     return falharam
 
 
+# --------------------------------------------------------------------------
+# Painel de juizes
+# --------------------------------------------------------------------------
+
+PAINEL_DIR = "painel"
+SEM_JULGAMENTO = "sem julgamento"  # o juiz nao respondeu; nunca vira "nenhum"
+PAINEL_FIELDS = [*JULGAMENTO_FIELDS, "parametros", "data_hora", "tentativas", "tokens_entrada", "tokens_saida"]
+CHAMADAS_FIELDS = [
+    "processo_id",
+    "risco_id",
+    "tentativa",
+    "data_hora",
+    "modelo_juiz",
+    "situacao",  # ok | resposta invalida | erro do provedor
+    "tokens_entrada",
+    "tokens_saida",
+    "erro",
+]
+TENTATIVAS_PAINEL = NOVAS_TENTATIVAS + 1
+
+
+def arquivo_do_painel(saida_dir: Path, nome: str) -> Path:
+    return saida_dir / PAINEL_DIR / f"julgamento_{nome}.csv"
+
+
+def chamadas_do_painel(saida_dir: Path, nome: str) -> Path:
+    return saida_dir / PAINEL_DIR / f"chamadas_{nome}.csv"
+
+
+def semente_do_julgamento(saida_dir: Path) -> int:
+    """A semente com que o juiz de referencia recebeu os candidatos, lida de ``julgamento.csv``."""
+    linhas = conf.ler_tabela(saida_dir / JULGAMENTO_CSV, ["processo_id", "risco_id", "semente"])
+    sementes = {linha["semente"] for linha in linhas}
+    if len(sementes) != 1 or not next(iter(sementes)).lstrip("-").isdigit():
+        raise JulgamentoError(f"{JULGAMENTO_CSV}: semente ausente ou com mais de um valor; nao da para reconstruir a ordem.")
+    return int(next(iter(sementes)))
+
+
+def _agora() -> str:
+    from datetime import datetime
+
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def julgar_painel(
+    corpus: Path,
+    juiz,
+    *,
+    limite: int | None = None,
+    dry_run: bool = False,
+    saida: Callable[[str], None] = print,
+    agora: Callable[[], str] = _agora,
+) -> int:
+    """Cobertura por um juiz do painel; devolve quantos riscos ficaram sem julgamento.
+
+    O juiz recebe exatamente a entrada do juiz de referencia: mesmo prompt, mesmos
+    candidatos e mesma ordem (a de ``embaralhar`` com a semente gravada em
+    ``julgamento.csv``, que nao e alterado). Grava ``painel/julgamento_<juiz>.csv``
+    e, por chamada, ``painel/chamadas_<juiz>.csv``. Resposta invalida ou erro do
+    provedor: uma nova tentativa; se falhar de novo, a linha fica com
+    ``sem julgamento`` e e refeita na proxima execucao.
+    """
+    from retro_juizes import JuizError
+
+    corpus, saida_dir, todos, processos, candidatos = _preparar(corpus, juiz.modelo, limite)
+    semente = semente_do_julgamento(saida_dir)
+    riscos = ler_riscos_reais(corpus)
+    caminho = arquivo_do_painel(saida_dir, juiz.nome)
+    registro = chamadas_do_painel(saida_dir, juiz.nome)
+    esperado = {
+        "modelo_juiz": juiz.modelo,
+        "versao_prompt_juiz": VERSAO_COBERTURA,
+        "semente": str(semente),
+        "parametros": juiz.parametros,
+    }
+    gravadas = _ja_gravadas(caminho, PAINEL_FIELDS, esperado)
+    validas = [linha for linha in gravadas if linha["cobertura"] != SEM_JULGAMENTO]
+    feitos = {(linha["processo_id"], linha["risco_id"]) for linha in validas}
+    pendentes = [
+        (processo, risco)
+        for processo in processos
+        for risco in riscos.get(processo.processo_id, [])
+        if (processo.processo_id, risco["risco_id"]) not in feitos
+    ]
+    total = sum(len(riscos.get(p.processo_id, [])) for p in processos)
+    saida(
+        f"{len(todos)} processo(s) incluido(s); {len(processos)} nesta execucao; {total} risco(s) reais; "
+        f"{total - len(pendentes)} ja julgado(s); {len(pendentes)} a julgar "
+        f"({len(gravadas) - len(validas)} deles sem julgamento na execucao anterior)."
+    )
+    saida(f"Juiz {juiz.nome}: {juiz.modelo} | prompt {VERSAO_COBERTURA} | semente {semente} (de {JULGAMENTO_CSV}) | saida: {caminho}")
+    saida(f"Parametros: {juiz.parametros}")
+    if dry_run:
+        saida("[dry-run] nada gravado.")
+        return 0
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    if len(validas) != len(gravadas):
+        conf.gravar_tabela(caminho, PAINEL_FIELDS, validas)  # as linhas sem julgamento serao refeitas
+
+    falharam = seguidas = 0
+    for posicao, (processo, risco) in enumerate(pendentes, start=1):
+        pid, rid = processo.processo_id, risco["risco_id"]
+        codificados = embaralhar(candidatos[pid], semente, pid, rid)
+        por_codigo = dict(codificados)
+        codigos = list(por_codigo)
+        prompt = prompt_cobertura(risco, codificados)
+        resultado: tuple[list[str], str] | None = None
+        entrada = saida_tokens = tentativas = 0
+        erro = ""
+        for tentativa in range(1, TENTATIVAS_PAINEL + 1):
+            tentativas = tentativa
+            chamada = {
+                "processo_id": pid,
+                "risco_id": rid,
+                "tentativa": tentativa,
+                "data_hora": agora(),
+                "modelo_juiz": juiz.modelo,
+                "tokens_entrada": 0,
+                "tokens_saida": 0,
+                "erro": "",
+            }
+            try:
+                resposta = juiz.perguntar(prompt)
+                chamada["tokens_entrada"], chamada["tokens_saida"] = resposta.tokens_entrada, resposta.tokens_saida
+                entrada += resposta.tokens_entrada
+                saida_tokens += resposta.tokens_saida
+                resultado = interpretar_cobertura(resposta.texto, codigos)
+                chamada["situacao"] = "ok"
+            except RespostaInvalida as exc:
+                erro = f"resposta invalida: {exc}"
+                chamada["situacao"], chamada["erro"] = "resposta invalida", str(exc)
+            except JuizError as exc:
+                erro = gerar._resumir_erro(str(exc))
+                chamada["situacao"], chamada["erro"] = "erro do provedor", erro
+            conf.gravar_tabela(registro, CHAMADAS_FIELDS, [chamada], acrescentar=True)
+            if resultado is not None:
+                break
+        linha = {
+            "processo_id": pid,
+            "risco_id": rid,
+            **esperado,
+            "data_hora": agora(),
+            "tentativas": tentativas,
+            "tokens_entrada": entrada,
+            "tokens_saida": saida_tokens,
+        }
+        if resultado is None:
+            falharam += 1
+            seguidas += 1
+            linha.update(candidatos_cobertos="", cobertura=SEM_JULGAMENTO, justificativa=f"[FALHA] {erro}")
+            conf.gravar_tabela(caminho, PAINEL_FIELDS, [linha], acrescentar=True)
+            saida(f"[FALHA] {pid} / {rid}: {erro}")
+            if seguidas >= FALHAS_SEGUIDAS_MAX:
+                restantes = len(pendentes) - posicao
+                falharam += restantes
+                saida(f"{seguidas} falhas seguidas; execucao interrompida ({restantes} risco(s) nem foram tentados).")
+                break
+            continue
+        seguidas = 0
+        cobertos, justificativa = resultado
+        marcados = [por_codigo[codigo] for codigo in cobertos]
+        linha.update(
+            candidatos_cobertos=SEPARADOR.join(c["candidato_id"] for c in marcados),
+            cobertura=derivar_cobertura([c["origem"] for c in marcados]),
+            justificativa=trocar_codigos(justificativa, por_codigo),
+        )
+        conf.gravar_tabela(caminho, PAINEL_FIELDS, [linha], acrescentar=True)
+        # sem o veredito: a conferencia do autor e as cegas
+        saida(f"[ok] {pid} / {rid}: {tentativas} chamada(s), {entrada} + {saida_tokens} tokens")
+    return falharam
+
+
 def construir_juiz(timeout: float = TIMEOUT_PADRAO) -> tuple[AIProvider, str, str]:
     """``(provedor, nome do provedor, modelo)`` a partir de JUDGE_PROVIDER/JUDGE_MODEL."""
     provedor = (ai_provider._config_value("JUDGE_PROVIDER") or "").strip().lower()
@@ -535,6 +718,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--semente", type=int, default=SEMENTE_PADRAO, help="Semente do embaralhamento (cobertura).")
     parser.add_argument("--timeout", type=float, default=TIMEOUT_PADRAO, help="Timeout de cada chamada, em segundos.")
     parser.add_argument("--dry-run", action="store_true", help="Mostrar o que seria feito, sem chamar o juiz.")
+    parser.add_argument(
+        "--painel",
+        metavar="JUIZ",
+        help="Cobertura por um juiz do painel (anthropic, openai ou google); grava em retrospectiva/painel/.",
+    )
+    parser.add_argument("--chaves", type=Path, help="Arquivo NOME=valor com OPENAI_API_KEY e GEMINI_API_KEY (painel).")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -543,7 +732,21 @@ def main(argv: list[str] | None = None) -> int:
     if not corpus.is_dir():
         print(f"Pasta do corpus nao encontrada: {corpus}", file=sys.stderr)
         return 2
+    chaves = args.chaves.resolve() if args.chaves else None
     os.chdir(ROOT)  # .streamlit/secrets.toml e lido a partir da raiz do projeto
+    if args.painel:
+        import retro_juizes
+
+        if args.riscos_ia:
+            print("ERRO: --painel so vale para a cobertura (sem --riscos-ia).", file=sys.stderr)
+            return 2
+        try:
+            juiz = retro_juizes.construir(args.painel.strip().lower(), chaves, timeout=args.timeout)
+            falharam = julgar_painel(corpus, juiz, limite=args.limite, dry_run=args.dry_run)
+        except (JulgamentoError, conf.ConferenciaError, retro_juizes.JuizError) as exc:
+            print(f"ERRO: {exc}", file=sys.stderr)
+            return 2
+        return 1 if falharam else 0
     try:
         provider, provedor, modelo = construir_juiz(args.timeout)
         print(f"Provedor do juiz: {provedor}")
