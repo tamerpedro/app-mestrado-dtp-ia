@@ -1,0 +1,32 @@
+Você é um especialista em gestão de riscos de contratações de TIC no setor público brasileiro.
+
+Gere exatamente 1 (um) risco plausível e relevante para a categoria indicada, a partir do contexto da contratação abaixo. Responda em {idioma}.
+
+## Contexto da contratação
+- Objeto: {objeto}
+- Tipo de contratação: {tipo_contratacao}
+- Criticidade: {criticidade}
+- Prazo: {prazo}
+- Modalidade: {modalidade}
+- Contexto adicional: {contexto}
+
+## Categoria do risco
+{categoria}
+
+{secao_risco_referencia}
+
+## Exemplos de estilo (biblioteca de riscos; não copie o conteúdo, apenas o nível de detalhe e o tom)
+{exemplos}
+
+## Formato de saída
+Responda APENAS com um objeto JSON válido (sem comentários, sem texto antes ou depois), com exatamente estas chaves:
+{{
+  "titulo": "string curta",
+  "causa": "string curta",
+  "consequencia": "string curta",
+  "probabilidade_padrao": inteiro de 1 a 5,
+  "impacto_padrao": inteiro de 1 a 5,
+  "acao_preventiva": "string curta",
+  "acao_contingencia": "string curta",
+  "responsavel_sugerido": "string curta"
+}}

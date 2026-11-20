@@ -1,0 +1,184 @@
+{
+  "planejamento": [
+    {
+      "titulo": "Estudo técnico preliminar sem análise adequada de alternativas de solução",
+      "causa": "Análise limitada de soluções disponíveis no mercado, de modelos de licenciamento e de custo total de propriedade durante o planejamento",
+      "consequencia": "Escolha de solução ou modelo de contratação menos vantajoso, com custos acima do necessário ou necessidade de nova contratação",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Comparar alternativas de mercado e modelos de licenciamento no estudo técnico preliminar, considerando custo total de propriedade e aderência ao ambiente",
+      "acao_contingencia": "Revisar o estudo técnico preliminar e ajustar o termo de referência antes da publicação do edital",
+      "responsavel_sugerido": "Equipe de planejamento da contratação"
+    },
+    {
+      "titulo": "Plano de transição da solução atual inexistente ou inadequado",
+      "causa": "Ausência de planejamento da migração, da execução em paralelo e da preservação de histórico e configurações da solução em substituição",
+      "consequencia": "Perda de cobertura e de dados históricos, interrupção de serviços críticos e retrabalho durante a substituição",
+      "probabilidade_padrao": 4,
+      "impacto_padrao": 5,
+      "acao_preventiva": "Definir no planejamento um plano de transição com inventário do ambiente, período de operação paralela, critérios de desligamento e requisitos de migração de dados",
+      "acao_contingencia": "Manter a solução atual em operação até a estabilização da nova e replanejar as etapas de migração",
+      "responsavel_sugerido": "Gestor da contratação e equipe técnica de infraestrutura"
+    },
+    {
+      "titulo": "Requisitos das unidades descentralizadas não levantados no planejamento",
+      "causa": "Falta de consulta estruturada às unidades regionais sobre suas necessidades, limitações de infraestrutura e capacidade local de atendimento",
+      "consequencia": "Cobertura desigual da solução, atendimento deficiente em algumas localidades e necessidade de ajustes contratuais após a assinatura",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Mapear requisitos, ambientes e demandas de todas as unidades antes da elaboração do termo de referência e formalizar a validação com os responsáveis locais",
+      "acao_contingencia": "Priorizar o atendimento das unidades críticas e formalizar ajustes de escopo ou de plano de implantação",
+      "responsavel_sugerido": "Área demandante em conjunto com representantes das unidades regionais"
+    }
+  ],
+  "selecao": [
+    {
+      "titulo": "Proposta inexequível ou com preço abaixo do mercado",
+      "causa": "Disputa agressiva por lances no pregão e ausência de análise rigorosa da composição de custos da proposta vencedora",
+      "consequencia": "Execução contratual deficiente, pedidos de reequilíbrio, abandono do contrato e necessidade de nova contratação",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Exigir planilha de composição de custos detalhada, realizar diligências sobre preços suspeitos e prever garantia contratual adequada",
+      "acao_contingencia": "Desclassificar a proposta inexequível, convocar o licitante remanescente ou aplicar sanções e executar a garantia",
+      "responsavel_sugerido": "Pregoeiro e equipe de planejamento da contratação"
+    },
+    {
+      "titulo": "Comprovação insuficiente de capacidade técnica do licitante",
+      "causa": "Atestados genéricos, não comparáveis em porte, complexidade ou abrangência geográfica, ou ausência de prova de conformidade técnica da solução ofertada",
+      "consequencia": "Seleção de licitante sem experiência compatível, falhas na implantação e retrabalho na solução",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 5,
+      "acao_preventiva": "Definir no edital atestados de capacidade técnica proporcionais ao objeto e prever prova de conceito ou demonstração técnica para o licitante provisoriamente classificado",
+      "acao_contingencia": "Inabilitar o licitante, convocar o próximo classificado e repetir a verificação técnica",
+      "responsavel_sugerido": "Equipe técnica de planejamento e fiscal técnico"
+    },
+    {
+      "titulo": "Fornecedor sem rede de suporte ou presença para atender o território exigido",
+      "causa": "Edital sem critérios claros para comprovar estrutura de atendimento, canais de suporte e parceiros capazes de cobrir todas as localidades demandadas",
+      "consequencia": "Atendimento desigual entre unidades, descumprimento de níveis de serviço e aumento de custos de deslocamento ou de tempo de resolução",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Exigir declaração e comprovação da capacidade de atendimento remoto e presencial, com níveis de serviço e penalidades por localidade",
+      "acao_contingencia": "Notificar a contratada para apresentar plano de adequação, aplicar penalidades e, se necessário, acionar a garantia contratual ou rescindir o contrato",
+      "responsavel_sugerido": "Gestor do contrato e fiscal administrativo"
+    }
+  ],
+  "gestao": [
+    {
+      "titulo": "Descumprimento dos níveis de serviço sem aplicação de sanções",
+      "causa": "Indicadores de nível de serviço mal definidos, ausência de registro sistemático de ocorrências ou demora na instauração de processo de apuração",
+      "consequencia": "Perda de efetividade da fiscalização, tolerância a desempenho abaixo do contratado e prejuízo ao interesse público",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Definir indicadores mensuráveis com metodologia de apuração, glosas e sanções previstas em contrato, e manter registro formal das ocorrências",
+      "acao_contingencia": "Notificar formalmente a contratada, instaurar processo de apuração e aplicar glosas ou sanções cabíveis",
+      "responsavel_sugerido": "Fiscal técnico do contrato"
+    },
+    {
+      "titulo": "Falhas na comunicação e no acompanhamento entre contratante e contratada",
+      "causa": "Ausência de rotinas formais de gestão, pontos focais não definidos e dispersão do atendimento entre várias unidades usuárias",
+      "consequencia": "Demandas sem tratamento adequado, retrabalho, divergências na interpretação do contrato e atrasos na resolução de pendências",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Estabelecer plano de comunicação, reuniões periódicas de acompanhamento, canal oficial de registro de demandas e designação de pontos focais",
+      "acao_contingencia": "Convocar reunião de alinhamento, formalizar pendências em ata com prazos e escalar a questão à gestão do contrato",
+      "responsavel_sugerido": "Gestor do contrato"
+    },
+    {
+      "titulo": "Pagamento em desacordo com os serviços efetivamente prestados",
+      "causa": "Conferência deficiente de entregas e relatórios, medição imprecisa dos serviços ou falta de integração entre fiscalização técnica e administrativa",
+      "consequencia": "Pagamentos indevidos, glosas tardias, questionamentos de órgãos de controle e desequilíbrio financeiro do contrato",
+      "probabilidade_padrao": 2,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Vincular o pagamento ao aceite formal das entregas, padronizar o modelo de medição e adotar lista de verificação entre fiscais técnico e administrativo",
+      "acao_contingencia": "Suspender ou glosar o valor controverso, solicitar correção da documentação e compensar valores pagos indevidamente em faturas futuras",
+      "responsavel_sugerido": "Fiscal administrativo do contrato"
+    }
+  ],
+  "solucao": [
+    {
+      "titulo": "Perda de dados históricos na migração de solução anterior",
+      "causa": "Ausência de plano de migração e de critérios de validação para dados, configurações e históricos da solução substituída",
+      "consequencia": "Perda de séries históricas, de regras e de parametrizações, com queda da capacidade de análise e de continuidade operacional",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Exigir plano de migração com inventário de dados e configurações, critérios de validação e período de operação em paralelo",
+      "acao_contingencia": "Manter a solução anterior ativa até a validação completa, restaurar dados a partir de backup e reexecutar a migração",
+      "responsavel_sugerido": "Gestor técnico do contrato"
+    },
+    {
+      "titulo": "Cobertura funcional insuficiente da solução para o ambiente monitorado",
+      "causa": "Requisitos de funcionalidades e de tipos de ativos a monitorar não mapeados integralmente, ou não comprovados na solução ofertada",
+      "consequencia": "Pontos cegos de monitoramento, necessidade de ferramentas complementares e custos adicionais não previstos",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Levantar o inventário de ativos e tecnologias, definir requisitos funcionais mensuráveis e exigir prova de conceito ou demonstração antes da aceitação da proposta",
+      "acao_contingencia": "Exigir adequação da solução por parte da contratada, ou adotar solução complementar temporária, e avaliar aditivo ou nova contratação",
+      "responsavel_sugerido": "Equipe de planejamento da contratação"
+    },
+    {
+      "titulo": "Desempenho e escalabilidade inadequados da solução em ambiente distribuído",
+      "causa": "Dimensionamento da arquitetura sem considerar volume de métricas, número de unidades e latência da rede entre localidades",
+      "consequencia": "Lentidão, atraso nos alertas, perda de coleta de dados e perda de confiança dos usuários na ferramenta",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Definir requisitos de desempenho e capacidade, exigir arquitetura de referência com coleta distribuída e testes de carga na homologação",
+      "acao_contingencia": "Redimensionar a infraestrutura, ajustar a arquitetura e a coleta e exigir da contratada plano de correção com prazo definido",
+      "responsavel_sugerido": "Gestor técnico do contrato"
+    }
+  ],
+  "instalacao": [
+    {
+      "titulo": "Falha na migração e na coexistência com a solução anterior",
+      "causa": "Ausência de plano de migração detalhado, inventário desatualizado dos itens monitorados e falta de período de operação paralela entre a solução anterior e a nova",
+      "consequencia": "Perda de visibilidade sobre o ambiente, falhas e incidentes não detectados durante a transição e perda de histórico e configurações de alertas",
+      "probabilidade_padrao": 4,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Exigir plano de migração e de implantação em fases, com inventário prévio, período de operação paralela, critérios de desligamento da solução anterior e backup de configurações e históricos",
+      "acao_contingencia": "Manter a solução anterior ativa até a validação, executar o plano de retorno (rollback) e reforçar o monitoramento manual dos serviços críticos",
+      "responsavel_sugerido": "Gestor do contrato e equipe técnica de infraestrutura"
+    },
+    {
+      "titulo": "Instalação inadequada em ambientes distribuídos e restrições de acesso à rede",
+      "causa": "Diferenças de infraestrutura, conectividade e políticas de segurança entre as unidades regionais, e falta de pré-requisitos como liberação de portas, credenciais de acesso e servidores preparados",
+      "consequencia": "Implantação desigual entre as unidades, cobertura parcial do monitoramento, retrabalho e atraso na entrada em produção",
+      "probabilidade_padrao": 4,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Levantar previamente os requisitos de cada unidade, formalizar checklist de pré-requisitos de ambiente e rede e definir cronograma de implantação por unidade, com testes de validação padronizados",
+      "acao_contingencia": "Priorizar as unidades com maior criticidade, apoiar remotamente ou presencialmente as unidades com pendências e ajustar a arquitetura de coleta, como coletores locais ou proxies",
+      "responsavel_sugerido": "Equipe técnica de infraestrutura e redes, com apoio dos representantes regionais"
+    }
+  ],
+  "cronograma": [
+    {
+      "titulo": "Atraso na migração e na desativação da solução anterior",
+      "causa": "Execução em paralelo das soluções sem plano de migração detalhado, com inventário incompleto dos itens a serem migrados e dependência de janelas de mudança restritas",
+      "consequencia": "Sobreposição prolongada das soluções, custos duplicados, perda de visibilidade operacional e atraso na conclusão da implantação",
+      "probabilidade_padrao": 4,
+      "impacto_padrao": 4,
+      "acao_preventiva": "Elaborar plano de migração com inventário atualizado, marcos intermediários, critérios de corte e janelas de mudança previamente acordadas",
+      "acao_contingencia": "Prorrogar de forma controlada a operação em paralelo, priorizar os ativos críticos e replanejar o cronograma com a contratada",
+      "responsavel_sugerido": "Gestor do contrato / Equipe de planejamento da contratação"
+    },
+    {
+      "titulo": "Indisponibilidade de ambiente, acessos ou equipe de apoio nas unidades",
+      "causa": "Falta de coordenação prévia entre a área central e as unidades descentralizadas quanto a liberação de acessos, infraestrutura, servidores de apoio e agenda de intervenções",
+      "consequencia": "Implantação desigual entre as unidades, paralisações no cronograma e atraso nas etapas de configuração, testes e repasse de conhecimento",
+      "probabilidade_padrao": 4,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Definir pontos focais em cada unidade, levantar pré-requisitos e consolidar calendário de implantação formalmente comunicado antes do início",
+      "acao_contingencia": "Reescalonar as unidades pendentes, designar equipe de apoio central e aplicar ajustes contratuais ao cronograma sem comprometer as demais etapas",
+      "responsavel_sugerido": "Fiscal técnico / Gestores das unidades regionais"
+    },
+    {
+      "titulo": "Atraso nas validações e aprovações de entregas pela Administração",
+      "causa": "Prazos internos de análise, homologação e atesto incompatíveis com o cronograma, além de sobrecarga ou indisponibilidade dos responsáveis pela validação",
+      "consequencia": "Encadeamento de atrasos nas fases seguintes, atraso nos pagamentos, questionamentos da contratada e risco de reequilíbrio ou aplicação indevida de sanções",
+      "probabilidade_padrao": 3,
+      "impacto_padrao": 3,
+      "acao_preventiva": "Fixar no termo de referência prazos de análise e atesto, designar fiscais e substitutos e planejar a agenda de homologações junto ao cronograma",
+      "acao_contingencia": "Mobilizar substitutos ou força-tarefa para as validações pendentes e repactuar formalmente os marcos afetados",
+      "responsavel_sugerido": "Gestor do contrato / Fiscal técnico"
+    }
+  ]
+}

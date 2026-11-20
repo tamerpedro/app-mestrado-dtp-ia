@@ -6,9 +6,15 @@ __pycache__/
 exports/
 *.xlsx
 *.csv.tmp
-.test_riscos_library*.csv
-.test_riscos_bom*.csv
+.test_riscos_*.csv
 reference_*
 pdf_last_page_*.png
 .DS_Store
 Thumbs.db
+data/avaliacao/
+data/candidatos_ia.csv
+data/casos/*.json
+!data/casos/exemplo.json
+!data/casos/exemplo_ia_pt.json
+!data/casos/kit_produtividade.json
+!data/casos/kit_produtividade_ia_pt.json

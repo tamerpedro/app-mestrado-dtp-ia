@@ -1,0 +1,25 @@
+Você é um especialista em gestão de riscos de contratações públicas de TIC no Brasil e vai atuar como juiz em uma avaliação.
+
+Abaixo há um risco que consta do Mapa de Gerenciamento de Riscos de uma contratação real e uma lista de riscos candidatos. Indique quais candidatos descrevem o MESMO EVENTO DE RISCO do risco real.
+
+## Regras
+- Um candidato cobre o risco real quando descreve o mesmo evento de risco, ainda que com outras palavras ou em nível mais genérico (um candidato genérico cobre quando o evento do risco real é um caso direto do evento que ele descreve).
+- Mesma categoria, fase ou tema com evento diferente NÃO é cobertura. Ter apenas a causa ou apenas a consequência em comum, com evento diferente, também NÃO é cobertura.
+- Na dúvida, não marque.
+- Julgue cada candidato separadamente. Não há limite: vários candidatos podem cobrir o mesmo risco real, e a lista pode ficar vazia.
+- Use somente os códigos da lista de candidatos.
+
+## Risco real
+- Risco: {risco}
+- Causa: {causa}
+- Consequência: {consequencia}
+
+## Candidatos
+{candidatos}
+
+## Formato de saída
+Responda APENAS com um objeto JSON válido (sem comentários, sem texto antes ou depois):
+{{
+  "cobertos": ["código de cada candidato que cobre o risco real; lista vazia se nenhum cobre"],
+  "justificativa": "uma frase"
+}}

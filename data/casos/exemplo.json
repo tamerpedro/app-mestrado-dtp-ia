@@ -1,0 +1,10 @@
+{
+  "nome": "Exemplo: solução de monitoramento de infraestrutura",
+  "objeto": "Contratação de solução de software para monitoramento de infraestrutura de TI, incluindo implantação e suporte técnico.",
+  "tipo_contratacao": "software",
+  "valor_estimado": 850000,
+  "criticidade": "alta",
+  "prazo": "24 meses",
+  "modalidade": "pregao",
+  "contexto": "Substituição de ferramenta legada de monitoramento, com integração a sistemas corporativos já existentes e necessidade de atendimento a múltiplas unidades regionais."
+}
