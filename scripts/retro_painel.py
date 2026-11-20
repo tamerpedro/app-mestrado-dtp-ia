@@ -283,7 +283,7 @@ def escolher_exemplos(divergencias: list[dict], quantos: int, evitar: set[Chave]
     return (primeiros + repetidos)[:quantos]
 
 
-def gravar_votos(saida_dir: Path, resultado: dict) -> Path:
+def linhas_de_votos(resultado: dict) -> list[dict[str, str]]:
     """Pares marcados por alguem (referencia ou juiz do painel), com o voto de cada um."""
     nomes, votos = resultado["nomes"], resultado["votos"]
     colunas = [REFERENCIA, *nomes, MAIORIA]
@@ -298,8 +298,14 @@ def gravar_votos(saida_dir: Path, resultado: dict) -> Path:
             marcas = {n: (None if votos[n][(pid, rid)] is None else cid in votos[n][(pid, rid)]) for n in colunas}
             if any(marcas.values()):
                 linhas.append({"processo_id": pid, "risco_id": rid, "candidato_id": cid, **{n: texto(v) for n, v in marcas.items()}})
+    return linhas
+
+
+def gravar_votos(saida_dir: Path, resultado: dict) -> Path:
+    """Grava ``painel/painel_votos.csv`` com as linhas de ``linhas_de_votos``."""
     caminho = saida_dir / julgar.PAINEL_DIR / VOTOS_CSV
-    conf.gravar_tabela(caminho, ["processo_id", "risco_id", "candidato_id", *colunas], linhas)
+    colunas = ["processo_id", "risco_id", "candidato_id", REFERENCIA, *resultado["nomes"], MAIORIA]
+    conf.gravar_tabela(caminho, colunas, linhas_de_votos(resultado))
     return caminho
 
 

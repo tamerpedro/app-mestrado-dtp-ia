@@ -51,6 +51,7 @@ requirements.txt                Dependências de produção (deploy no Streamlit
 requirements-dev.txt            + pytest, para desenvolvimento local
 .streamlit/secrets.example.toml Modelo dos secrets (AI_PROVIDER, AI_MODEL, chaves, MODO_AVALIACAO)
 scripts/consolidar_avaliacao.py Consolidação dos logs de avaliação (resumo por processo e por categoria)
+scripts/retro_*.py              Avaliação retrospectiva (extração, geração, julgamento, painel e consolidação)
 src/domain.py                   Códigos de domínio e rótulos por idioma
 src/i18n.py                     Função t() de tradução
 src/ai_provider.py              Provedor de IA (Anthropic / compatível OpenAI / fake para testes)
@@ -119,6 +120,61 @@ Junte os arquivos `log_*.json` baixados pelos participantes numa pasta (ex.: `lo
 ```powershell
 python scripts/consolidar_avaliacao.py --log-dir logs_recebidos --out-dir .
 ```
+
+## Avaliação retrospectiva
+
+Avaliação do artefato sem participantes: para cada contratação pública de TIC já realizada, os riscos do Mapa de Gerenciamento de Riscos real são comparados com o que o app teria oferecido (catálogo aplicável ao tipo de contratação + riscos gerados por IA). Um modelo juiz marca, para cada risco real, quais candidatos descrevem o mesmo evento de risco. Os scripts ficam em `scripts/retro_*.py`; nenhum deles altera `app.py`, os prompts de geração nem `data/riscos_base.csv`.
+
+### Insumos
+
+Os dados ficam numa pasta fora do repositório, passada em `--corpus`; PDFs, CSVs do corpus e chaves nunca são comitados.
+
+| Arquivo (na pasta do corpus) | Conteúdo |
+|---|---|
+| `corpus_casos.csv` | Um processo por linha: `grupo` (`externo` ou `dataprev`), `objeto`, `tipo_sugerido` (`servico`, `aquisicao`, `licenciamento`), `incluir` e `analise_principal` |
+| `pdfs/` | Documentos de onde os mapas de riscos são extraídos |
+| `corpus_riscos_reais.csv` | Riscos reais extraídos e conferidos (risco, causa, consequência) |
+
+A chave da Anthropic é a do projeto (`.streamlit/secrets.toml` ou variável de ambiente). As chaves da OpenAI e do Google, usadas só pelo painel, ficam num arquivo `NOME=valor` fora do repositório, passado em `--chaves`.
+
+### Ordem dos scripts
+
+Todos recebem `--corpus "<pasta do corpus>"`.
+
+| Passo | Comando | Chama modelo? | Grava |
+|---|---|---|---|
+| 1 | `retro_extrair.py` | sim | `corpus_riscos_reais.csv`, `extracao_log.csv` |
+| 2 | `retro_conferencia.py --gerar`, depois `--aplicar` | não | `conferencia_extracao.csv`; correções em `corpus_riscos_reais.csv` e `correcoes_extracao.csv` |
+| 3 | `retro_gerar.py` | sim | `retrospectiva/casos/`, `candidatos.csv`, `geracao_log.csv` |
+| 4 | `retro_julgar.py` e `retro_julgar.py --riscos-ia` | sim | `retrospectiva/julgamento.csv` (cobertura, julgamento principal) e `riscos_ia.csv` (`nomeia_objeto`, `especifico_do_objeto`, `grupo`) |
+| 5 | `retro_julgar.py --painel <anthropic\|openai\|google> --chaves <arquivo>` | sim | `retrospectiva/painel/julgamento_<juiz>.csv` e `chamadas_<juiz>.csv` |
+| 6 | `retro_painel.py` | não | `retrospectiva/painel/painel_votos.csv` e, no terminal, cobertura por juiz, kappa de Cohen e de Fleiss e custo |
+| 7 | `retro_consolidar.py` | não | `retrospectiva/resultados/` |
+
+Os passos que chamam modelo são retomáveis: o que já foi gravado não é refeito. O painel repete o julgamento de cobertura com um modelo econômico de cada fornecedor, com o mesmo prompt (`prompts/juiz_cobertura_v1.txt`), os mesmos candidatos e a mesma ordem; o voto da maioria (2 de 3) entra como análise de robustez, e `julgamento.csv` não é alterado. O `retro_amostra.py` (amostra para conferência humana) ficou no repositório como registro, mas não faz parte do fluxo.
+
+### Saídas da consolidação
+
+```powershell
+python scripts/retro_consolidar.py --corpus "<pasta do corpus>"
+```
+
+Grava dois conjuntos de tabelas em `retrospectiva/resultados/`: `principal/` (processos com `incluir=sim` e `analise_principal=sim`) e `sensibilidade/` (todos com `incluir=sim`). Em todas as tabelas a coluna `grupo` é o grupo do processo, e os grupos nunca são somados; o agrupamento de riscos de IA parecidos aparece como `grupo_ia`.
+
+| Tabela | Conteúdo |
+|---|---|
+| `por_processo.csv`, `por_tipo.csv` | Riscos reais cobertos só pelo catálogo, só pela IA, por ambos e por nenhum; riscos de IA gerados, grupos distintos, com `nomeia_objeto=sim`, com `especifico_do_objeto=sim` e sem correspondente no mapa real (por risco e por grupo) |
+| `por_categoria.csv` | Riscos reais cobertos por categoria do candidato, separando catálogo e IA; riscos de IA por categoria |
+| `nao_cobertos.csv` | Riscos reais sem cobertura, com o texto |
+| `ia_sem_correspondente.csv` | Riscos de IA que nenhum risco real marcou, com o texto e a classificação |
+| `ia_cobertura_incremental.csv` | Riscos reais cobertos só pela IA, com o risco de IA que cobre |
+| `robustez_cobertura.csv` | Cobertura por classe pelo Opus, por cada juiz do painel e pela maioria |
+| `robustez_concordancia.csv` | Concordância e kappa de Cohen por par, kappa de Fleiss, e proporção de riscos com o mesmo resultado e a mesma classe entre maioria e Opus |
+| `robustez_por_processo.csv` | Cobertura total e riscos de IA sem correspondente por processo, pelo Opus e pela maioria |
+| `robustez_ia_sem_correspondente.csv` | Riscos e grupos de IA sem correspondente, pelo Opus e pela maioria |
+| `divergencias_maioria_opus.csv` | Riscos em que maioria e Opus diferem no resultado coberto/não coberto, com os candidatos marcados por cada um |
+
+No terminal, para cada conjunto e grupo, o script imprime os totais de cobertura pelo Opus e pela maioria, as medianas e os intervalos interquartis por processo e a cobertura por tipo de contratação. As medidas do painel são as mesmas que `retro_painel.py` imprime.
 
 ## Rodar no Streamlit Cloud
 
